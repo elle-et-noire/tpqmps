@@ -1,6 +1,7 @@
 using ITensors
 using LinearAlgebra
 using Plots
+using Printf
 
 function boxmuller()
   x = rand()
@@ -14,21 +15,11 @@ function leftunitary(χ, d)
   return u[:, :, 1, :] # u[1, :, :, :] is right unitary
 end
 
-function transverseIsing()
-  N = 16 # number of site
-  χ = 40 # virtual bond dimension of Ψ
-  χeff = χ # truncate dimension
-  d = 2 # physical dimension
-  J = 1
-  g = 1
-  l = 1 # larger than maximum energy density
-  kmax = 1 # num to cool down
-  Ψbonds = siteinds(χ, N + 1)
-  physinds = siteinds(d, N)
+function hamdens_transverseising(sitenum, physinds, l)
+  J = 1; g = 1
+  d = dim(physinds[1])
 
-  Ψ = [ITensor(leftunitary(χ, d), physinds[i], Ψbonds[i], Ψbonds[i + 1]) for i in 1:N]
-
-  hbonds = siteinds(3, N - 1)
+  hbonds = siteinds(3, sitenum - 1)
   leftmold = zeros(d, 3, d)
   rightmold = zeros(d, 3, d)
   leftmold[:, 1, :] = rightmold[:, 3, :] = I(2)
@@ -37,110 +28,110 @@ function transverseIsing()
   rightmold2 = deepcopy(rightmold)
   rightmold2[:, 1, :] -= l * I(2) # I ⊗ ⋯ ⊗ (-l*I+σx)
   h_left = ITensor(leftmold, physinds[1], hbonds[1], physinds[1]')
-  h_right = ITensor(rightmold / N, physinds[end], hbonds[end], physinds[end]') # coef "N" smashed in rH
-  l_h_right = ITensor(-rightmold2 / N, physinds[end], hbonds[end], physinds[end]') # coef "-N" smashed in rH2
+  h_right = ITensor(rightmold / sitenum, physinds[end], hbonds[end], physinds[end]') # coef "N" smashed in rH
+  l_h_right = ITensor(-rightmold2 / sitenum, physinds[end], hbonds[end], physinds[end]') # coef "-N" smashed in rH2
   middlemold = zeros(3, d, 3, d)
   middlemold[1, :, 1, :] = I(2)
   middlemold[3, :, 3, :] = I(2)
   middlemold[1, :, 2, :] = middlemold[2, :, 3, :] = sqrt(J) * [1 0;0 -1]
   middlemold[1, :, 3, :] = -g * [0 1;1 0]
   # l - h
-  l_h = [ITensor(middlemold, hbonds[i-1], physinds[i], hbonds[i], physinds[i]') for i in 2:N-1]
-  # h : hamiltonian density
-  # hamdens = [ITensor(middlemold, hbonds[i-1], physinds[i], hbonds[i], physinds[i]') for i in 2:N-1]
+  l_h = [ITensor(middlemold, hbonds[i-1], physinds[i], hbonds[i], physinds[i]') for i in 2:sitenum-1]
   pushfirst!(l_h, h_left)
-  # pushfirst!(hamdens, h_left)
   push!(l_h, l_h_right)
+  # h : hamiltonian density
   hamdens = deepcopy(l_h)
-  # push!(hamdens, h_right)
   hamdens[end] = h_right
 
-  singleh = reduce(*, hamdens)
-  D, _ = eigen(singleh, physinds, physinds')
-  D |> storage |> display
+  return (hamdens, l_h)
+end
 
-  # h2 = lH * h[2] * δ(mpobonds[2], mpobonds[N-1]) * rH
-  # a, b, c, e, m, n = inds(h2)
-  # C = combiner(a, c, m)
-  # C2 = combiner(b, e, n)
-  # display(matrix(C * h2 * C2))
+function cooling(Ψk, Ψprev, Ψbonds, Dχbonds, l_h)
 
-  # ket_k_can = Vector{ITensor}(undef, N)
-  # ket_k_canbonds = Vector{{Index{Int64}}}(undef, N + 1)
-  ket_k_can = deepcopy(Ψ)
-  ket_k_canbonds = deepcopy(Ψbonds)
-  # ket_k_canbonds[1] = Ψbonds[1]
-  # ket_k_canbonds[end] = Ψbonds[end]
-  enes = []
+end
+
+function energydensity()
+  N = 16 # number of site
+  χ = 40 # virtual bond dimension of Ψ
+  d = 2 # physical dimension
+  l = 4 # larger than maximum energy density
+  kmax = 200 # num to cool down
+  Ψbonds = siteinds(χ, N + 1)
+  physinds = siteinds(d, N)
+
+  Ψprev = [ITensor(leftunitary(χ, d), physinds[i], Ψbonds[i], Ψbonds[i + 1]) for i in 1:N]
+
+  hamdens, l_h = hamdens_transverseising(N, physinds, l)
+
+  Ψk = Vector{ITensor}(undef, N)
+  Dχbonds = Vector{Index}(undef, N + 1)
+  Dχbonds[1] = Ψbonds[1]
+  Dχbonds[end] = Ψbonds[end]
+  uks = Vector{Float64}(undef, kmax)
   for k in 1:kmax
     #======== left-canonical ========#
-    U, λ, V = svd(Ψ[1] * l_h[1] |> noprime, (Ψbonds[1]))
-    # ignore U @ |aux> since nothing operate here and contraction is same as unit matrix.
-    ket_k_can[1] = replaceind(λ, commonind(U, λ) => Ψbonds[1]) * V
+    U, λ, V = svd(Ψprev[1] * l_h[1] |> noprime, (Ψbonds[1]))
+    # ignore U @ |aux> since nothing operate here and U works same as unit matrix.
+    Ψk[1] = replaceind(λ, commonind(U, λ) => Ψbonds[1]) * V
 
     for site in 1:N-1
-      U, λ, V = svd((ket_k_can[site] * Ψ[site+1]) * l_h[site+1] |> noprime, (ket_k_canbonds[site], physinds[site]))
-      ket_k_canbonds[site+1] = commonind(U, λ)
-      ket_k_can[site] = U
-      ket_k_can[site+1] = λ * V
+      U, λ, V = svd((Ψk[site] * Ψprev[site+1]) * l_h[site+1] |> noprime, (Dχbonds[site], physinds[site]))
+      Dχbonds[site+1] = commonind(U, λ)
+      Ψk[site] = U
+      Ψk[site+1] = λ * V
     end
 
     #======== right-canonical ========#
-    U, λ, V = svd(ket_k_can[end], (ket_k_canbonds[N+1]))
+    U, λ, V = svd(Ψk[end], (Ψbonds[end]))
     # ignore V @ |aux> since nothing operate here and contraction is same as unit matrix.
-    ket_k_can[end] = V * replaceind(λ, commonind(λ, U) => ket_k_canbonds[end])
+    Ψk[end] = V * replaceind(λ, commonind(λ, U) => Ψbonds[end])
 
     for site in N-1:-1:1
-      U, λ, V = svd(ket_k_can[site] * ket_k_can[site+1], (ket_k_canbonds[site+2], physinds[site+1]))
-      ket_k_canbonds[site+1] = Index(χeff)
-      ket_k_can[site+1] = δ(ket_k_canbonds[site+1], commonind(λ, U)) * U # truncate
-      ket_k_can[site] = V * λ * δ(ket_k_canbonds[site+1], commonind(λ, U))
+      U, λ, V = svd(Ψk[site] * Ψk[site+1], (Ψbonds[site+2], physinds[site+1]))
+      Ψk[site+1] = δ(Ψbonds[site+1], commonind(λ, U)) * U # truncate
+      Ψk[site] = V * λ * δ(Ψbonds[site+1], commonind(λ, U))
     end
 
-    Ψnorm2 = prime(ket_k_can[1], ket_k_canbonds[2]) * conj(ket_k_can[1])
+    #======== Ψnorm2 = <k|k> ========#
+    Ψnorm2 = prime(Ψk[1], Ψbonds[2]) * conj(Ψk[1])
     for site in 2:N-1
-      Ψnorm2 *= prime(ket_k_can[site], ket_k_canbonds[site], ket_k_canbonds[site+1])
-      Ψnorm2 *= conj(ket_k_can[site])
+      Ψnorm2 *= prime(Ψk[site], Ψbonds[site], Ψbonds[site+1])
+      Ψnorm2 *= conj(Ψk[site])
     end
-    Ψnorm2 *= prime(ket_k_can[end], ket_k_canbonds[end-1])
-    Ψnorm2 *= conj(ket_k_can[end])
+    Ψnorm2 *= prime(Ψk[end], Ψbonds[end-1])
+    Ψnorm2 *= conj(Ψk[end])
     println("k=$k, Ψnorm2 = ", Ψnorm2[])
     Ψnorm2 = real(Ψnorm2[])
 
-    # energy density
-    uk = prime(ket_k_can[1], ket_k_canbonds[2], physinds[1]) * hamdens[1] * conj(ket_k_can[1])
+    #======== uₖ = Eₖ/N ========#
+    uₖ= prime(Ψk[1], Ψbonds[2], physinds[1]) * hamdens[1] * conj(Ψk[1])
     for site in 2:N-1
-      uk *= prime(ket_k_can[site], ket_k_canbonds[site], ket_k_canbonds[site+1], physinds[site])
-      uk *= conj(ket_k_can[site])
-      uk *= hamdens[site]
+      uₖ *= prime(Ψk[site])
+      uₖ *= conj(Ψk[site])
+      uₖ *= hamdens[site]
     end
-    uk *= prime(ket_k_can[end], ket_k_canbonds[end-1], physinds[end])
-    uk *= conj(ket_k_can[end])
-    uk *= hamdens[end]
-    println(real(uk[]) / Ψnorm2)
+    uₖ *= prime(Ψk[end], Ψbonds[end-1], physinds[end])
+    uₖ *= conj(Ψk[end])
+    uₖ *= hamdens[end]
+    uks[k] = real(uₖ[]) / Ψnorm2
+    println("uk = ", uks[k])
 
-    push!(enes, real(uk[]) / Ψnorm2)
-
-    Ψ = deepcopy(ket_k_can / Ψnorm2^inv(2N))
-    Ψbonds = deepcopy(ket_k_canbonds)
+    Ψprev = deepcopy(Ψk / Ψnorm2^inv(2N))
   end
 
   println("==== end ====")
-  display(enes)
-  println("\n==== time record ====\n")
-  kBT = [N * (l - enes[k]) / (2k) for k in 1:kmax]
-
-  plot(kBT, enes)
-  savefig("energy.png")
-  # println(Ψ * conj(Ψ))
-
-
-  # Ψnorm2 = prime(Ψ[1], Ψbonds[2]) * conj(Ψ[1])
-  # for site in 2:N-1
-  #   Ψnorm2 *= prime(Ψ[site], Ψbonds[site], Ψbonds[site+1]) * conj(Ψ[site])
-  # end
-  # Ψnorm2 *= prime(Ψ[N], Ψbonds[N]) * conj(Ψ[N])
+  display(uks)
+  kBT = [N * (l - uks[k]) / 2k for k in 1:kmax]
+  open("energy-density-l=$l.txt", "w") do fp
+    content = ""
+    for (t, uk) in zip(kBT, uks)
+      content *= "$t $uk\n"
+    end
+    write(fp, content)
+  end
+  plot(kBT, uks)
+  savefig("energy-density.png")
+  println("\n\n==== time record ====")
 end
 
-ITensors.set_warn_order(33)
-@time transverseIsing()
+@time energydensity()

@@ -46,92 +46,102 @@ function hamdens_transverseising(sitenum, physinds, l)
   return (hamdens, l_h)
 end
 
-function cooling(Ψk, Ψprev, Ψbonds, Dχbonds, l_h)
+function cooldown_seqtrunc(Ψk, Ψprev, Ψbonds, Dχbonds, physinds, l_h)
+  N = length(Ψk)
+  #======== left-canonical ========#
+  U, S, V = svd(Ψprev[1] * l_h[1] |> noprime, (Ψbonds[1]))
+  # ignore U @ |aux> since nothing operate here and U works same as unit matrix.
+  Ψk[1] = replaceind(S, commonind(U, S) => Ψbonds[1]) * V
 
+  for site in 1:N-1
+    U, S, V = svd((Ψk[site] * Ψprev[site+1]) * l_h[site+1] |> noprime, (Dχbonds[site], physinds[site]))
+    Dχbonds[site+1] = commonind(U, S)
+    Ψk[site] = U
+    Ψk[site+1] = S * V
+  end
+
+  #======== right-canonical ========#
+  U, S, V = svd(Ψk[end], (Ψbonds[end]))
+  # ignore V @ |aux> since nothing operate here and contraction is same as unit matrix.
+  Ψk[end] = V * replaceind(S, commonind(S, U) => Ψbonds[end])
+
+  for site in N-1:-1:1
+    U, S, V = svd(Ψk[site] * Ψk[site+1], (Ψbonds[site+2], physinds[site+1]))
+    Ψk[site+1] = δ(Ψbonds[site+1], commonind(S, U)) * U # truncate
+    Ψk[site] = V * S * δ(Ψbonds[site+1], commonind(S, U))
+  end
 end
 
-function energydensity()
+function norm2(Ψ, Ψbonds)
+  N = length(Ψ)
+  Ψnorm2 = prime(Ψ[1], Ψbonds[2]) * conj(Ψ[1])
+  for site in 2:N-1
+    Ψnorm2 *= prime(Ψ[site], Ψbonds[site], Ψbonds[site+1])
+    Ψnorm2 *= conj(Ψ[site])
+  end
+  Ψnorm2 *= prime(Ψ[end], Ψbonds[end-1])
+  Ψnorm2 *= conj(Ψ[end])
+  return real(Ψnorm2[])
+end
+
+function expectedvalue(Ψ, Ψbonds, physinds, mpo, Ψnorm2)
+  N = length(Ψ)
+  val= prime(Ψ[1], Ψbonds[2], physinds[1]) * mpo[1] * conj(Ψ[1])
+  for site in 2:N-1
+    val *= prime(Ψ[site])
+    val *= conj(Ψ[site])
+    val *= mpo[site]
+  end
+  val *= prime(Ψ[end], Ψbonds[end-1], physinds[end])
+  val *= conj(Ψ[end])
+  val *= mpo[end]
+  return real(val[]) / Ψnorm2
+end
+
+function entanglemententropy(Ψ, Ψbonds, physinds, subrange)
+  U, S, V = svd(foldl(*, Ψ), physinds[subrange])
+  return -sum(storage(S) .|> x -> x^2 * log(x^2))
+end
+
+function energydensity(;l)
   N = 16 # number of site
   χ = 40 # virtual bond dimension of Ψ
   d = 2 # physical dimension
-  l = 4 # larger than maximum energy density
   kmax = 200 # num to cool down
   Ψbonds = siteinds(χ, N + 1)
   physinds = siteinds(d, N)
-
   Ψprev = [ITensor(leftunitary(χ, d), physinds[i], Ψbonds[i], Ψbonds[i + 1]) for i in 1:N]
-
   hamdens, l_h = hamdens_transverseising(N, physinds, l)
 
-  Ψk = Vector{ITensor}(undef, N)
+  Ψ = [Ψprev, Vector{ITensor}(undef, N)]
   Dχbonds = Vector{Index}(undef, N + 1)
   Dχbonds[1] = Ψbonds[1]
   Dχbonds[end] = Ψbonds[end]
-  uks = Vector{Float64}(undef, kmax)
+  uₖs = Vector{Float64}(undef, kmax)
+
   for k in 1:kmax
-    #======== left-canonical ========#
-    U, λ, V = svd(Ψprev[1] * l_h[1] |> noprime, (Ψbonds[1]))
-    # ignore U @ |aux> since nothing operate here and U works same as unit matrix.
-    Ψk[1] = replaceind(λ, commonind(U, λ) => Ψbonds[1]) * V
-
-    for site in 1:N-1
-      U, λ, V = svd((Ψk[site] * Ψprev[site+1]) * l_h[site+1] |> noprime, (Dχbonds[site], physinds[site]))
-      Dχbonds[site+1] = commonind(U, λ)
-      Ψk[site] = U
-      Ψk[site+1] = λ * V
-    end
-
-    #======== right-canonical ========#
-    U, λ, V = svd(Ψk[end], (Ψbonds[end]))
-    # ignore V @ |aux> since nothing operate here and contraction is same as unit matrix.
-    Ψk[end] = V * replaceind(λ, commonind(λ, U) => Ψbonds[end])
-
-    for site in N-1:-1:1
-      U, λ, V = svd(Ψk[site] * Ψk[site+1], (Ψbonds[site+2], physinds[site+1]))
-      Ψk[site+1] = δ(Ψbonds[site+1], commonind(λ, U)) * U # truncate
-      Ψk[site] = V * λ * δ(Ψbonds[site+1], commonind(λ, U))
-    end
-
+    cooldown_seqtrunc(Ψ[k&1+1], Ψ[2-k&1], Ψbonds, Dχbonds, physinds, l_h)
     #======== Ψnorm2 = <k|k> ========#
-    Ψnorm2 = prime(Ψk[1], Ψbonds[2]) * conj(Ψk[1])
-    for site in 2:N-1
-      Ψnorm2 *= prime(Ψk[site], Ψbonds[site], Ψbonds[site+1])
-      Ψnorm2 *= conj(Ψk[site])
-    end
-    Ψnorm2 *= prime(Ψk[end], Ψbonds[end-1])
-    Ψnorm2 *= conj(Ψk[end])
-    println("k=$k, Ψnorm2 = ", Ψnorm2[])
-    Ψnorm2 = real(Ψnorm2[])
-
+    Ψnorm2 = norm2(Ψ[k&1+1], Ψbonds)
+    println("k=$k, Ψnorm2 = $Ψnorm2")
     #======== uₖ = Eₖ/N ========#
-    uₖ= prime(Ψk[1], Ψbonds[2], physinds[1]) * hamdens[1] * conj(Ψk[1])
-    for site in 2:N-1
-      uₖ *= prime(Ψk[site])
-      uₖ *= conj(Ψk[site])
-      uₖ *= hamdens[site]
-    end
-    uₖ *= prime(Ψk[end], Ψbonds[end-1], physinds[end])
-    uₖ *= conj(Ψk[end])
-    uₖ *= hamdens[end]
-    uks[k] = real(uₖ[]) / Ψnorm2
-    println("uk = ", uks[k])
-
-    Ψprev = deepcopy(Ψk / Ψnorm2^inv(2N))
+    uₖs[k] = expectedvalue(Ψ[k&1+1], Ψbonds, physinds, hamdens, Ψnorm2)
+    println("uk = ", uₖs[k])
+    Ψ[k&1+1] /= Ψnorm2^inv(2N)
   end
 
   println("==== end ====")
-  display(uks)
-  kBT = [N * (l - uks[k]) / 2k for k in 1:kmax]
+  kBT = [N * (l - uₖs[k]) / 2k for k in 1:kmax]
   open("energy-density-l=$l.txt", "w") do fp
     content = ""
-    for (t, uk) in zip(kBT, uks)
+    for (t, uk) in zip(kBT, uₖs)
       content *= "$t $uk\n"
     end
     write(fp, content)
   end
-  plot(kBT, uks)
+  plot(kBT, uₖs)
   savefig("energy-density.png")
   println("\n\n==== time record ====")
 end
 
-@time energydensity()
+@time energydensity(l=64)

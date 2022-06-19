@@ -147,3 +147,66 @@ function optimization_quest()
   speedtest_fast()
   speedtest_slow()
 end
+
+function entanglemententropy()
+  i, j, k, l = siteinds(3, 4)
+  a, b, c = siteinds(2, 3)
+  A = randomITensor(i, j, a)
+  B = randomITensor(j, k, b)
+  C = randomITensor(k, l, c)
+  bulk = A * B * C
+  norm2_exact = (bulk * conj(bulk))[]
+  println("norm2_exact=$norm2_exact")
+  A /= norm2_exact^inv(6)
+  B /= norm2_exact^inv(6)
+  C /= norm2_exact^inv(6)
+  bulk /= sqrt(norm2_exact)
+  U, S, V = svd(bulk, (i, a))
+  ee_a_bc_exact = -sum(storage(S) .|> x -> x^2 * log(x^2))
+  println("ee_a_bc_exact=$ee_a_bc_exact")
+  U, S, V = svd(bulk, a)
+  ee_a_bc_exact_sub = -sum(storage(S) .|> x -> x^2 * log(x^2))
+  println("ee_a_bc_exact_sub=$ee_a_bc_exact_sub")
+  U, S, V = svd(bulk, (l, c))
+  ee_ab_c_exact = -sum(storage(S) .|> x -> x^2 * log(x^2))
+  println("ee_ab_c_exact=$ee_ab_c_exact")
+  U, S, V = svd(bulk, b)
+  ee_ac_b_exact = -sum(storage(S) .|> x -> x^2 * log(x^2))
+  println("ee_ac_b_exact=$ee_ac_b_exact")
+  auxL, S, V = svd(A, i)
+  Acanl = S * V
+  U, S, V = svd(Acanl * B, (commonind(auxL, Acanl), a))
+  Acanl = U
+  Bcanl = S * V
+  U, S, V = svd(Bcanl * C, (commonind(Acanl, Bcanl), b))
+  Bcanl = U
+  Ccanl = S * V
+  ee_ab_c_leftcan = -sum(storage(S) .|> x -> x^2 * log(x^2))
+  println("ee_ab_c_leftcan=$ee_ab_c_leftcan")
+
+  auxR, S, V = svd(Ccanl, l)
+  Ccan = S * V
+  U, Sbc, V = svd(Bcanl * Ccan, (commonind(auxR, Ccan), c))
+  Ccan = U
+  Bcan = V * Sbc
+  ee_ab_c_can = -sum(storage(Sbc) .|> x -> x^2 * log(x^2))
+  println("ee_ab_c_can=$ee_ab_c_can")
+  U, Sab, V = svd(Acanl * Bcan, (commonind(Ccan, Bcan), b))
+  Bcan = U
+  Acan = V * Sab
+  ee_a_bc_can = -sum(storage(Sab) .|> x -> x^2 * log(x^2))
+  println("ee_a_bc_can=$ee_a_bc_can")
+  # V * conj(prime(V, commonind(V, Sab))) |> matrix |> display
+  # comb = combiner(commonind(auxL, V), commonind(V, Sab))
+  # V2 = V * comb
+  # V2 * conj(prime(V2, combinedind(comb))) |> matrix |> display
+  # [-2(sab*sbc)^2 * log(sab*sbc) for (sab, sbc) in zip(storage(Sab), storage(Sbc))] |> sum |> println
+  U, S, V = svd(Acan * Bcan, (commonind(Acan, auxL), a))
+  Acan = U
+  Bcan = S * V
+  U, S, V = svd(Bcan, b)
+  ee_ac_b_can = -sum(storage(S) .|> x -> x^2 * log(x^2))
+  println("ee_ac_b_can=$ee_ac_b_can")
+end
+
+entanglemententropy()

@@ -15,6 +15,18 @@ function leftunitary(χ, d)
   return u[:, :, 1, :] # u[1, :, :, :] is right unitary
 end
 
+function genΨ(;sitenum, physdim, bonddim, withaux=true)
+  Ψbonds = siteinds(bonddim, sitenum + 1)
+  physinds = siteinds(physdim, sitenum)
+  Ψ = [ITensor(leftunitary(bonddim, physdim), physinds[i], Ψbonds[i], Ψbonds[i + 1]) for i in 1:sitenum]
+  if !withaux
+    Ψbonds[1], Ψbonds[end] = Index(1), Index(1)
+    Ψ[1] = ITensor(leftunitary(bonddim, physdim)[:, :, 1], physinds[1], Ψbonds[1], Ψbonds[2])
+    Ψ[end] = ITensor(leftunitary(bonddim, physdim)[:, :, 1], physinds[end], Ψbonds[end-1], Ψbonds[end])
+  end
+  return Ψ, Ψbonds, physinds
+end
+
 function hamdens_transverseising(sitenum, physinds, l)
   J = 1; g = 1
   d = dim(physinds[1])
@@ -46,7 +58,40 @@ function hamdens_transverseising(sitenum, physinds, l)
   return (hamdens, l_h)
 end
 
-function cooldown_seqtrunc(Ψk, Ψprev, Ψbonds, Dχbonds, physinds, l_h)
+# λ : array of singular values(not necessarily normalized)
+function entropy(λ)
+  nrm = λ.^2 |> sum |> sqrt
+  return -sum(λ ./ nrm .|> x -> 2x^2*log(x))
+end
+
+function Ψentropies(_Ψ, Ψbonds)
+  N = length(_Ψ)
+  entropies = Vector{Float64}(undef, N + 1)
+  Ψ = deepcopy(_Ψ)
+
+  U, S, V = svd(Ψ[1], Ψbonds[1])
+  Ψ[1] = replaceind(S, commonind(U, S) => Ψbonds[1]) * V
+  for site in 1:N-1
+    U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site], Ψ[site+1]))
+    Ψ[site] = U
+    Ψ[site+1] = S * V
+  end
+  U, S, V = svd(Ψ[end], Ψbonds[end])
+  Ψ[end] = V * replaceind(S, commonind(S, U) => Ψbonds[end])
+  entropies[end] = entropy(storage(S))
+  for site in N-1:-1:1
+    U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site+1], Ψ[site]))
+    Ψ[site+1] = δ(Ψbonds[site+1], commonind(S, U)) * U # truncate
+    Ψ[site] = V * S * δ(Ψbonds[site+1], commonind(S, U))
+    entropies[site+1] = entropy(storage(S))
+  end
+  _, S, _ = svd(Ψ[1], Ψbonds[1])
+  entropies[1] = entropy(storage(S))
+
+  return entropies
+end
+
+function cooldown_seqtrunc(Ψk, Ψprev, Ψbonds, Dχbonds, physinds, l_h; measentropies=false, entropies=[])
   N = length(Ψk)
   #======== left-canonical ========#
   U, S, V = svd(Ψprev[1] * l_h[1] |> noprime, (Ψbonds[1]))
@@ -64,11 +109,21 @@ function cooldown_seqtrunc(Ψk, Ψprev, Ψbonds, Dχbonds, physinds, l_h)
   U, S, V = svd(Ψk[end], (Ψbonds[end]))
   # ignore V @ |aux> since nothing operate here and contraction is same as unit matrix.
   Ψk[end] = V * replaceind(S, commonind(S, U) => Ψbonds[end])
+  if measentropies
+    entropies[end] = entropy(storage(S))
+  end
 
   for site in N-1:-1:1
     U, S, V = svd(Ψk[site] * Ψk[site+1], (Ψbonds[site+2], physinds[site+1]))
     Ψk[site+1] = δ(Ψbonds[site+1], commonind(S, U)) * U # truncate
     Ψk[site] = V * S * δ(Ψbonds[site+1], commonind(S, U))
+    if measentropies
+      entropies[site+1] = entropy(storage(S))
+    end
+  end
+  if measentropies
+    _, S, _ = svd(Ψk[1], Ψbonds[1])
+    entropies[1] = entropy(storage(S))
   end
 end
 
@@ -98,19 +153,12 @@ function expectedvalue(Ψ, Ψbonds, physinds, mpo, Ψnorm2)
   return real(val[]) / Ψnorm2
 end
 
-function entanglemententropy(Ψ, Ψbonds, physinds, subrange)
-  U, S, V = svd(foldl(*, Ψ), physinds[subrange])
-  return -sum(storage(S) .|> x -> x^2 * log(x^2))
-end
-
-function energydensity(;l)
+function plotenergydensity(;l)
   N = 16 # number of site
   χ = 40 # virtual bond dimension of Ψ
   d = 2 # physical dimension
   kmax = 200 # num to cool down
-  Ψbonds = siteinds(χ, N + 1)
-  physinds = siteinds(d, N)
-  Ψprev = [ITensor(leftunitary(χ, d), physinds[i], Ψbonds[i], Ψbonds[i + 1]) for i in 1:N]
+  Ψprev, Ψbonds, physinds = genΨ(sitenum=N, bonddim=χ, physdim=d)
   hamdens, l_h = hamdens_transverseising(N, physinds, l)
 
   Ψ = [Ψprev, Vector{ITensor}(undef, N)]
@@ -121,10 +169,8 @@ function energydensity(;l)
 
   for k in 1:kmax
     cooldown_seqtrunc(Ψ[k&1+1], Ψ[2-k&1], Ψbonds, Dχbonds, physinds, l_h)
-    #======== Ψnorm2 = <k|k> ========#
     Ψnorm2 = norm2(Ψ[k&1+1], Ψbonds)
     println("k=$k, Ψnorm2 = $Ψnorm2")
-    #======== uₖ = Eₖ/N ========#
     uₖs[k] = expectedvalue(Ψ[k&1+1], Ψbonds, physinds, hamdens, Ψnorm2)
     println("uk = ", uₖs[k])
     Ψ[k&1+1] /= Ψnorm2^inv(2N)
@@ -144,4 +190,54 @@ function energydensity(;l)
   println("\n\n==== time record ====")
 end
 
-@time energydensity(l=64)
+function plotentropies(;l)
+  N = 64 # number of site
+  χ = 40 # virtual bond dimension of Ψ
+  d = 2 # physical dimension
+  kmax = 6 # num to cool down
+  Ψprev, Ψbonds, physinds = genΨ(sitenum=N, bonddim=χ, physdim=d)
+  _, l_h = hamdens_transverseising(N, physinds, l)
+
+  Ψ = [Ψprev, Vector{ITensor}(undef, N)]
+  Dχbonds = Vector{Index}(undef, N + 1)
+  Dχbonds[1] = Ψbonds[1]
+  Dχbonds[end] = Ψbonds[end]
+  multitempentropies = Dict()
+  entropies = Vector{Float64}(undef, N + 1)
+  # meastemperatures = [200:200:1600;]
+  meastemperatures = [0,3,6]
+
+  multitempentropies["0"] = Ψentropies(Ψprev, Ψbonds)
+
+  for k in 1:kmax
+    if k in meastemperatures
+      cooldown_seqtrunc(Ψ[k&1+1], Ψ[2-k&1], Ψbonds, Dχbonds, physinds, l_h, measentropies=true, entropies=entropies)
+      multitempentropies["$k"] = deepcopy(entropies)
+    else
+      cooldown_seqtrunc(Ψ[k&1+1], Ψ[2-k&1], Ψbonds, Dχbonds, physinds, l_h)
+    end
+    Ψnorm2 = norm2(Ψ[k&1+1], Ψbonds)
+    println("k=$k, Ψnorm2 = $Ψnorm2")
+    Ψ[k&1+1] /= Ψnorm2^inv(2N)
+  end
+
+  println("==== end ====")
+  open("entropies-l=$l.txt", "w") do fp
+    content = ""
+    for item in multitempentropies
+      content *= item.first * "\n"
+      for ee in item.second
+        content *= "$ee\n"
+      end
+      content *= "\n"
+    end
+    write(fp, content)
+  end
+  for item in multitempentropies
+    plot!([0:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)")
+  end
+  savefig("entanglemententropy-l=$l.png")
+  println("\n\n==== time record ====")
+end
+
+@time plotentropies(l=2)

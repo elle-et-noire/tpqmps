@@ -1,5 +1,6 @@
 using ITensors
 using LinearAlgebra
+using Plots
 
 function sample01()
   i = Index(2)
@@ -196,11 +197,6 @@ function entanglemententropy()
   Acan = V * Sab
   ee_a_bc_can = -sum(storage(Sab) .|> x -> x^2 * log(x^2))
   println("ee_a_bc_can=$ee_a_bc_can")
-  # V * conj(prime(V, commonind(V, Sab))) |> matrix |> display
-  # comb = combiner(commonind(auxL, V), commonind(V, Sab))
-  # V2 = V * comb
-  # V2 * conj(prime(V2, combinedind(comb))) |> matrix |> display
-  # [-2(sab*sbc)^2 * log(sab*sbc) for (sab, sbc) in zip(storage(Sab), storage(Sbc))] |> sum |> println
   U, S, V = svd(Acan * Bcan, (commonind(Acan, auxL), a))
   Acan = U
   Bcan = S * V
@@ -209,4 +205,136 @@ function entanglemententropy()
   println("ee_ac_b_can=$ee_ac_b_can")
 end
 
-entanglemententropy()
+# λ : array of singular values(not necessarily normalized)
+function entropy(λ)
+  nrm = λ.^2 |> sum |> sqrt
+  return -sum(λ ./ nrm .|> x -> 2x^2*log(x))
+end
+
+function Ψentropies(_Ψ, Ψbonds)
+  N = length(_Ψ)
+  entropies = Vector{Float64}(undef, N + 1)
+  Ψ = deepcopy(_Ψ)
+
+  U, S, V = svd(Ψ[1], Ψbonds[1])
+  Ψ[1] = replaceind(S, commonind(U, S) => Ψbonds[1]) * V
+  for site in 1:N-1
+    U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site], Ψ[site+1]))
+    Ψ[site] = U
+    Ψ[site+1] = S * V
+  end
+  U, S, V = svd(Ψ[end], Ψbonds[end])
+  Ψ[end] = V * replaceind(S, commonind(S, U) => Ψbonds[end])
+  entropies[end] = entropy(storage(S))
+  for site in N-1:-1:1
+    U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site+1], Ψ[site]))
+    Ψ[site+1] = δ(Ψbonds[site+1], commonind(S, U)) * U # truncate
+    Ψ[site] = V * S * δ(Ψbonds[site+1], commonind(S, U))
+    entropies[site+1] = entropy(storage(S))
+  end
+  _, S, _ = svd(Ψ[1], Ψbonds[1])
+  entropies[1] = entropy(storage(S))
+
+  return entropies
+end
+
+function unitary3ord(physind; leftbond, rightbond, rightunitary=false)
+  χ = max(dim(leftbond), dim(rightbond))
+  d = dim(physind)
+  q, _ = reshape([boxmuller() for i in 1:(χ*d)^2], (χ * d, χ * d)) |> qr
+  u = reshape(q, (d, χ, d, χ))
+  if !rightunitary
+    return ITensor(u[:, 1:dim(leftbond), 1, 1:dim(rightbond)], physind, leftbond, rightbond) # leftunitary
+  end
+  return ITensor(u[1, 1:dim(leftbond), :, 1:dim(rightbond)], leftbond, physind, rightbond) # rightunitary
+end
+
+function genΨ(;sitenum, physdim, bonddim, withaux=true, rightunitary=false)
+  Ψbonds = siteinds(bonddim, sitenum + 1)
+  physinds = siteinds(physdim, sitenum)
+  Ψ = [unitary3ord(physinds[i], leftbond=Ψbonds[i], rightbond=Ψbonds[i + 1], rightunitary=rightunitary) for i in 1:sitenum]
+  if !withaux
+    Ψbonds[1], Ψbonds[end] = Index(1), Index(1)
+    Ψ[1] = unitary3ord(physinds[1], leftbond=Ψbonds[1], rightbond=Ψbonds[2], rightunitary=rightunitary)
+    Ψ[end] = unitary3ord(physinds[1], leftbond=Ψbonds[end-1], rightbond=Ψbonds[2], rightunitary=rightunitary)
+  end
+  return Ψ, Ψbonds, physinds
+end
+
+function genΨnocanonical(;sitenum, physdim, bonddim, withaux=true)
+  Ψbonds = siteinds(bonddim, sitenum + 1)
+  physinds = siteinds(physdim, sitenum)
+
+  Ψ = [ITensor(reshape([boxmuller() for i in 1:bonddim^2*physdim], (physdim, bonddim, bonddim)),
+        physinds[site], Ψbonds[site], Ψbonds[site+1]) for site in 1:sitenum]
+  if !withaux
+    Ψbonds[1], Ψbonds[end] = Index(1), Index(1)
+    Ψ[1] = ITensor(reshape([boxmuller() for i in 1:bonddim*physdim], (physdim, bonddim)), physinds[1], Ψbonds[1], Ψbonds[2])
+    Ψ[end] = ITensor(reshape([boxmuller() for i in 1:bonddim*physdim], (physdim, bonddim)), physinds[end], Ψbonds[end-1], Ψbonds[end])
+  end
+  return Ψ, Ψbonds, physinds
+end
+
+function entropytest2()
+  N = 6
+  # Ψ, Ψbonds, physinds = genΨ(sitenum = N, physdim = 2, bonddim = 3, rightunitary=true)
+  Ψ, Ψbonds, physinds = genΨnocanonical(sitenum=N, physdim=2, bonddim=3)
+  bulk = foldl(*, Ψ)
+  exactentropies = zeros(Float64, N + 1)
+  _, S, _ = svd(bulk, Ψbonds[1])
+  exactentropies[1] = entropy(storage(S))
+  for site in 1:N-1
+    _, S, _ = svd(bulk, (Ψbonds[1], physinds[1:site]...))
+    exactentropies[site+1] = entropy(storage(S))
+  end
+  _, S, _ = svd(bulk, Ψbonds[end])
+  exactentropies[end] = entropy(storage(S))
+
+  canentropies = Ψentropies(Ψ, Ψbonds)
+
+  plot([1:N+1;], exactentropies, xlabel="i", ylabel="S_i", label="exact")
+  plot!([1:N+1;], canentropies, label="canonical")
+  savefig("entropytest2.png")
+end
+
+function readwritetensor()
+  i = siteinds(40, 4)
+  a = siteinds(2, 3)
+  A = randomITensor(i[1], a[1], i[2])
+  B = randomITensor(i[2], a[2], i[3])
+  C = randomITensor(i[3], a[3], i[4])
+  Ψ = [A, B, C]
+
+  open("readwritetensorsample.txt", "w") do fp
+    content = ""
+    for p in Ψ
+      for val in storage(p)
+        content *= "$val\n"
+      end
+      content *= "\n"
+      write(fp, content)
+      content = ""
+    end
+  end
+
+  Ψ2 = []
+  current = Vector{Float64}()
+  num = 1
+
+  # open("readwritetensorsample.txt", "r") do fp
+  for line in eachline("readwritetensorsample.txt")
+    if line == ""
+      push!(Ψ2, ITensor(current, i[num], a[num], i[num+1]))
+      current = Vector{Float64}()
+      num += 1
+    else
+      push!(current, parse(Float64, line))
+    end
+  end
+
+  for (p1, p2) in zip(Ψ, Ψ2)
+    println(storage(p1) ≈ storage(p2))
+  end
+end
+
+entropytest2()

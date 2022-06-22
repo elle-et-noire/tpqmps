@@ -9,20 +9,39 @@ function boxmuller()
   return sqrt(-2 * log(x)) * exp(2pi * im * y)
 end
 
-function leftunitary(χ, d)
+function unitary3ord(physind; leftbond, rightbond, rightunitary=false)
+  χ = max(dim(leftbond), dim(rightbond))
+  d = dim(physind)
   q, _ = reshape([boxmuller() for i in 1:(χ*d)^2], (χ * d, χ * d)) |> qr
   u = reshape(q, (d, χ, d, χ))
-  return u[:, :, 1, :] # u[1, :, :, :] is right unitary
+  if !rightunitary
+    return ITensor(u[:, 1:dim(leftbond), 1, 1:dim(rightbond)], physind, leftbond, rightbond) # leftunitary
+  end
+  return ITensor(u[1, 1:dim(leftbond), :, 1:dim(rightbond)], leftbond, physind, rightbond) # rightunitary
 end
 
-function genΨ(;sitenum, physdim, bonddim, withaux=true)
+function genΨ(;sitenum, physdim, bonddim, withaux=true, rightunitary=false)
   Ψbonds = siteinds(bonddim, sitenum + 1)
   physinds = siteinds(physdim, sitenum)
-  Ψ = [ITensor(leftunitary(bonddim, physdim), physinds[i], Ψbonds[i], Ψbonds[i + 1]) for i in 1:sitenum]
+  Ψ = [unitary3ord(physinds[i], leftbond=Ψbonds[i], rightbond=Ψbonds[i + 1], rightunitary=rightunitary) for i in 1:sitenum]
   if !withaux
     Ψbonds[1], Ψbonds[end] = Index(1), Index(1)
-    Ψ[1] = ITensor(leftunitary(bonddim, physdim)[:, :, 1], physinds[1], Ψbonds[1], Ψbonds[2])
-    Ψ[end] = ITensor(leftunitary(bonddim, physdim)[:, :, 1], physinds[end], Ψbonds[end-1], Ψbonds[end])
+    Ψ[1] = unitary3ord(physinds[1], leftbond=Ψbonds[1], rightbond=Ψbonds[2], rightunitary=rightunitary)
+    Ψ[end] = unitary3ord(physinds[1], leftbond=Ψbonds[end-1], rightbond=Ψbonds[2], rightunitary=rightunitary)
+  end
+  return Ψ, Ψbonds, physinds
+end
+
+function genΨnocanonical(;sitenum, physdim, bonddim, withaux=true)
+  Ψbonds = siteinds(bonddim, sitenum + 1)
+  physinds = siteinds(physdim, sitenum)
+
+  Ψ = [ITensor(reshape([boxmuller() for i in 1:bonddim^2*physdim], (physdim, bonddim, bonddim)),
+        physinds[site], Ψbonds[site], Ψbonds[site+1]) for site in 1:sitenum]
+  if !withaux
+    Ψbonds[1], Ψbonds[end] = Index(1), Index(1)
+    Ψ[1] = ITensor(reshape([boxmuller() for i in 1:bonddim*physdim], (physdim, bonddim)), physinds[1], Ψbonds[1], Ψbonds[2])
+    Ψ[end] = ITensor(reshape([boxmuller() for i in 1:bonddim*physdim], (physdim, bonddim)), physinds[end], Ψbonds[end-1], Ψbonds[end])
   end
   return Ψ, Ψbonds, physinds
 end
@@ -127,6 +146,47 @@ function cooldown_seqtrunc(Ψk, Ψprev, Ψbonds, Dχbonds, physinds, l_h; measen
   end
 end
 
+function cooldown_unitrunc(Ψk, Ψprev, Ψbonds, Dχbonds, physinds, l_h; measentropies=false, entropies=[])
+  N = length(Ψk)
+  #======== left-canonical ========#
+  U, S, V = svd(Ψprev[1] * l_h[1] |> noprime, (Ψbonds[1]))
+  # ignore U @ |aux> since nothing operate here and U works same as unit matrix.
+  Ψk[1] = replaceind(S, commonind(U, S) => Ψbonds[1]) * V
+
+  for site in 1:N-1
+    U, S, V = svd((Ψk[site] * Ψprev[site+1]) * l_h[site+1] |> noprime, (Dχbonds[site], physinds[site]))
+    Dχbonds[site+1] = commonind(U, S)
+    Ψk[site] = U
+    Ψk[site+1] = S * V
+  end
+
+  #======== right-canonical ========#
+  U, S, V = svd(Ψk[end], (Dχbonds[end]))
+  # ignore V @ |aux> since nothing operate here and contraction is same as unit matrix.
+  Ψk[end] = V * replaceind(S, commonind(S, U) => Dχbonds[end])
+  if measentropies
+    entropies[end] = entropy(storage(S * δ(commonind(U, S), Ψbonds[end])))
+  end
+
+  for site in N-1:-1:1
+    U, S, V = svd(Ψk[site] * Ψk[site+1], (Dχbonds[site+2], physinds[site+1]))
+    Dχbonds[site+1] = commonind(U, S)
+    Ψk[site+1] = U
+    Ψk[site] = V * S
+    if measentropies
+      entropies[site+1] = entropy(storage(S * δ(Dχbonds[site+1], Ψbonds[site+1])))
+    end
+  end
+  if measentropies
+    U, S, V = svd(Ψk[1], Ψbonds[1])
+    entropies[1] = entropy(storage(S * δ(commonind(U, S), Ψbonds[1])))
+  end
+  for bond in 2:N # truncate
+    Ψk[bond-1] *= δ(Dχbonds[bond], Ψbonds[bond])
+    Ψk[bond] *= δ(Dχbonds[bond], Ψbonds[bond])
+  end
+end
+
 function norm2(Ψ, Ψbonds)
   N = length(Ψ)
   Ψnorm2 = prime(Ψ[1], Ψbonds[2]) * conj(Ψ[1])
@@ -153,12 +213,12 @@ function expectedvalue(Ψ, Ψbonds, physinds, mpo, Ψnorm2)
   return real(val[]) / Ψnorm2
 end
 
-function plotenergydensity(;l)
+function plotenergydensity(;l, kmax=100, counter=0, pall=plot(), psub=plot(), savefigure=true, withaux=true)
   N = 16 # number of site
   χ = 40 # virtual bond dimension of Ψ
   d = 2 # physical dimension
-  kmax = 200 # num to cool down
-  Ψprev, Ψbonds, physinds = genΨ(sitenum=N, bonddim=χ, physdim=d)
+  #kmax: num to cool down
+  Ψprev, Ψbonds, physinds = genΨnocanonical(sitenum=N, bonddim=χ, physdim=d, withaux=withaux)
   hamdens, l_h = hamdens_transverseising(N, physinds, l)
 
   Ψ = [Ψprev, Vector{ITensor}(undef, N)]
@@ -178,24 +238,44 @@ function plotenergydensity(;l)
 
   println("==== end ====")
   kBT = [N * (l - uₖs[k]) / 2k for k in 1:kmax]
-  open("energy-density-l=$l.txt", "w") do fp
+  open("energy-density-l=$l,χ=$χ,N=$N,noncanon,seqtrunc,No$counter,$(withaux ? "" : "noaux").txt", "w") do fp
     content = ""
     for (t, uk) in zip(kBT, uₖs)
       content *= "$t $uk\n"
     end
     write(fp, content)
   end
-  plot(kBT, uₖs)
-  savefig("energy-density.png")
+  scatter!(pall, kBT, uₖs, xlabel="k_BT", ylabel="u_k", label="l=$l,(No.$counter)")
+  if savefigure
+    savefig("energy-density-l=$l,χ=$χ,N=$N,noncanon,seqtrunc,No$counter,$(withaux ? "" : "noaux").png")
+  end
+  scatter!(psub, kBT, uₖs, xlabel="k_BT", ylabel="u_k", label="l=$l,(No.$counter)", xlims=(0,4))
+  if savefigure
+    savefig("energy-density-l=$l,χ=$χ,N=$N,noncanon,seqtrunc,No$counter,$(withaux ? "" : "noaux"),sub.png")
+  end
   println("\n\n==== time record ====")
+end
+
+function writeΨ(Ψ, filename)
+  open(filename, "w") do fp
+    content = ""
+    for p in Ψ
+      for val in storage(p)
+        content *= "$val\n"
+      end
+      content *= "\n"
+      write(fp, content)
+      content = ""
+    end
+  end
 end
 
 function plotentropies(;l)
   N = 64 # number of site
   χ = 40 # virtual bond dimension of Ψ
   d = 2 # physical dimension
-  kmax = 6 # num to cool down
-  Ψprev, Ψbonds, physinds = genΨ(sitenum=N, bonddim=χ, physdim=d)
+  kmax = 200 # num to cool down
+  Ψprev, Ψbonds, physinds = genΨnocanonical(sitenum=N, bonddim=χ, physdim=d)
   _, l_h = hamdens_transverseising(N, physinds, l)
 
   Ψ = [Ψprev, Vector{ITensor}(undef, N)]
@@ -205,16 +285,17 @@ function plotentropies(;l)
   multitempentropies = Dict()
   entropies = Vector{Float64}(undef, N + 1)
   # meastemperatures = [200:200:1600;]
-  meastemperatures = [0,3,6]
+  meastemperatures = [0:40:200;]
 
   multitempentropies["0"] = Ψentropies(Ψprev, Ψbonds)
 
   for k in 1:kmax
     if k in meastemperatures
-      cooldown_seqtrunc(Ψ[k&1+1], Ψ[2-k&1], Ψbonds, Dχbonds, physinds, l_h, measentropies=true, entropies=entropies)
+      cooldown_unitrunc(Ψ[k&1+1], Ψ[2-k&1], Ψbonds, Dχbonds, physinds, l_h, measentropies=true, entropies=entropies)
       multitempentropies["$k"] = deepcopy(entropies)
+      writeΨ(Ψ[k&1+1], "Ψ-l=$l,k=$k,N=$N,χ=$χ,noncanon,unitruncate.txt")
     else
-      cooldown_seqtrunc(Ψ[k&1+1], Ψ[2-k&1], Ψbonds, Dχbonds, physinds, l_h)
+      cooldown_unitrunc(Ψ[k&1+1], Ψ[2-k&1], Ψbonds, Dχbonds, physinds, l_h)
     end
     Ψnorm2 = norm2(Ψ[k&1+1], Ψbonds)
     println("k=$k, Ψnorm2 = $Ψnorm2")
@@ -236,8 +317,33 @@ function plotentropies(;l)
   for item in multitempentropies
     plot!([0:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)")
   end
-  savefig("entanglemententropy-l=$l.png")
+  savefig("entanglemententropy-l=$l,N=$N,χ=$χ,noncanon,unitrunc.png")
   println("\n\n==== time record ====")
 end
 
-@time plotentropies(l=2)
+function plotmultienergydensities_samel()
+  pall = plot()
+  psub = plot()
+  withaux = false
+  for i in 1:5
+    @time plotenergydensity(l=8, kmax=100, counter=i, pall=pall, psub=psub, savefigure=false, withaux=withaux)
+  end
+  plot(pall)
+  savefig("energy-density-l=8,χ=40,N=16,noncanon,seqtrunc,$(withaux ? "" : "noaux"),all.png")
+  plot(psub)
+  savefig("energy-density-l=8,χ=40,N=16,noncanon,seqtrunc,$(withaux ? "" : "noaux"),sub.png")
+end
+
+function plotmultienergydensities_forl()
+  pall = plot()
+  psub = plot()
+  for l in [2, 4, 8, 16]
+    plotenergydensity(l=l, kmax=100, counter=0, pall=pall, psub=psub, savefigure=false)
+  end
+  plot(pall)
+  savefig("energy-density-forl,χ=40,N=16,noncanon,seqtrunc,all.png")
+  plot(psub)
+  savefig("energy-density-forl,χ=40,N=16,noncanon,seqtrunc,sub.png")
+end
+
+@time plotmultienergydensities_samel()

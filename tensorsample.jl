@@ -238,6 +238,65 @@ function Ψentropies(_Ψ, Ψbonds)
   return entropies
 end
 
+function Ψcenterentropies(_Ψ, _Ψbonds, _physinds)
+  N = length(_Ψ)
+  entropies = Vector{Float64}(undef, N ÷ 2)
+  println("start")
+  Ψ = deepcopy(_Ψ)
+  println("psi copy")
+  Ψbonds = deepcopy(_Ψbonds)
+  println("bond copy")
+  χ = dim(Ψbonds[end])
+  physinds = deepcopy(_physinds)
+  println("physind copy")
+  # add aux explicitly to process uniformly
+  push!(physinds, Ψbonds[end])
+  pushfirst!(physinds, Ψbonds[1])
+  push!(Ψbonds, Index(1))
+  pushfirst!(Ψbonds, Index(1))
+  push!(Ψ, ITensor(I(χ), Ψbonds[end-1], Ψbonds[end], physinds[end]))
+  pushfirst!(Ψ, ITensor(I(χ), Ψbonds[1], Ψbonds[2], physinds[1]))
+
+  println("prepare complete")
+
+  # put two sites together from center and move to end(right edge) and put two sites together from center of rest... and so on
+  # center = N // 2 + 1
+  for count in 0:N÷2-1
+    cpos = N ÷ 2 + 1 - count
+    Ψ[cpos] *= Ψ[cpos+1]
+    C = combiner(physinds[cpos], physinds[cpos+1])
+    Ψ[cpos] *= C
+    physinds[cpos] = combinedind(C)
+    while cpos < N - 2count
+      U, S, V = svd(cpos * Ψ[cpos+2], (physinds[cpos], Ψbonds[cpos+3]))
+      Ψ[cpos+1] = U
+      Ψ[cpos] = S * V # V has physinds[cpos+2]
+      Ψbonds[cpos+1] = commonind(U, S)
+      physinds[cpos], physinds[cpos+2] = physinds[cpos+1], physinds[cpos]
+      cpos += 1
+    end
+    deleteat!(Ψ, length(Ψ) - count)
+    deleteat!(Ψbonds, length(Ψbonds) - 1 - count)
+    deleteat!(physinds, length(physinds) - count)
+  end
+
+  println("move complete.")
+
+  for site in 1:length(Ψ)-1
+    U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site], Ψ[site+1]))
+    Ψ[site] = U
+    Ψ[site+1] = S * V
+  end
+  for site in length(Ψ)-1:-1:2
+    U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site+1], Ψ[site]))
+    Ψ[site+1] = U
+    Ψ[site] = V * S
+    entropies[site-1] = entropy(storage(S))
+  end
+
+  return entropies
+end
+
 function unitary3ord(physind; leftbond, rightbond, rightunitary=false)
   χ = max(dim(leftbond), dim(rightbond))
   d = dim(physind)
@@ -280,32 +339,41 @@ function entropytest2()
   # Ψ, Ψbonds, physinds = genΨ(sitenum = N, physdim = 2, bonddim = 3, rightunitary=true)
   Ψ, Ψbonds, physinds = genΨnocanonical(sitenum=N, physdim=2, bonddim=3)
   bulk = foldl(*, Ψ)
-  exactentropies = zeros(Float64, N + 1)
-  _, S, _ = svd(bulk, Ψbonds[1])
-  exactentropies[1] = entropy(storage(S))
-  for site in 1:N-1
-    _, S, _ = svd(bulk, (Ψbonds[1], physinds[1:site]...))
-    exactentropies[site+1] = entropy(storage(S))
+
+  # exactentropies = zeros(Float64, N + 1)
+  # _, S, _ = svd(bulk, Ψbonds[1])
+  # exactentropies[1] = entropy(storage(S))
+  # for site in 1:N-1
+  #   _, S, _ = svd(bulk, (Ψbonds[1], physinds[1:site]...))
+  #   exactentropies[site+1] = entropy(storage(S))
+  # end
+  # _, S, _ = svd(bulk, Ψbonds[end])
+  # exactentropies[end] = entropy(storage(S))
+
+  # canentropies = Ψentropies(Ψ, Ψbonds)
+
+  # plot([1:N+1;], exactentropies, xlabel="i", ylabel="S_i", label="exact")
+  # plot!([1:N+1;], canentropies, label="canonical")
+  # savefig("entropytest2-edge.png")
+
+  println("uouo")
+  exactcenterentropies = zeros(Float64, N ÷ 2)
+  for n in 2:2:N
+    println("guee")
+    _, S, _ = svd(bulk, (physinds[(N-n)÷2+1:(N+n)÷2]...))
+    exactcenterentropies[n÷2] = entropy(storage(S))
   end
-  _, S, _ = svd(bulk, Ψbonds[end])
-  exactentropies[end] = entropy(storage(S))
+  println("yy")
+  cancenterentropies = Ψcenterentropies(Ψ, Ψbonds, physinds)
+  println("draw!")
 
-  canentropies = Ψentropies(Ψ, Ψbonds)
-
-  plot([1:N+1;], exactentropies, xlabel="i", ylabel="S_i", label="exact")
-  plot!([1:N+1;], canentropies, label="canonical")
-  savefig("entropytest2.png")
+  plot([2:2:N;], exactcenterentropies, xlabel="n", ylabel="S_n^c", label="exact")
+  plot!([2:2:N;], cancenterentropies, label="canonical")
+  savefig("entropytest2-center.png")
 end
 
-function readwritetensor()
-  i = siteinds(40, 4)
-  a = siteinds(2, 3)
-  A = randomITensor(i[1], a[1], i[2])
-  B = randomITensor(i[2], a[2], i[3])
-  C = randomITensor(i[3], a[3], i[4])
-  Ψ = [A, B, C]
-
-  open("readwritetensorsample.txt", "w") do fp
+function writeΨ(Ψ, filename)
+  open(filename, "w") do fp
     content = ""
     for p in Ψ
       for val in storage(p)
@@ -316,6 +384,17 @@ function readwritetensor()
       content = ""
     end
   end
+end
+
+function readwritetensor()
+  i = siteinds(40, 4)
+  a = siteinds(2, 3)
+  A = randomITensor(i[1], a[1], i[2])
+  B = randomITensor(i[2], a[2], i[3])
+  C = randomITensor(i[3], a[3], i[4])
+  Ψ = [A, B, C]
+
+  writeΨ(Ψ, "readwritetensorsample.txt")
 
   Ψ2 = []
   current = Vector{Float64}()
@@ -325,10 +404,10 @@ function readwritetensor()
   for line in eachline("readwritetensorsample.txt")
     if line == ""
       push!(Ψ2, ITensor(current, i[num], a[num], i[num+1]))
-      current = Vector{Float64}()
+      current = Vector{ComplexF64}()
       num += 1
     else
-      push!(current, parse(Float64, line))
+      push!(current, parse(ComplexF64, line))
     end
   end
 

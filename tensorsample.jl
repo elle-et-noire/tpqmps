@@ -149,7 +149,7 @@ function optimization_quest()
   speedtest_slow()
 end
 
-function entanglemententropy()
+function entanglemententropytest()
   i, j, k, l = siteinds(3, 4)
   a, b, c = siteinds(2, 3)
   A = randomITensor(i, j, a)
@@ -234,6 +234,50 @@ function Ψentropies(_Ψ, Ψbonds)
   end
   _, S, _ = svd(Ψ[1], Ψbonds[1])
   entropies[1] = entropy(storage(S))
+
+  return entropies
+end
+
+function Ψcenterentropies2(_Ψ, _Ψbonds)
+  N = length(_Ψ)
+  entropies = Vector{Float64}(undef, N ÷ 2)
+  testentropies = Vector{Float64}(undef, N ÷ 2)
+  Ψ = deepcopy(_Ψ)
+  Ψbonds = deepcopy(_Ψbonds)
+
+  U, S1, V = svd(Ψ[1], Ψbonds[1])
+  U, S2, V = svd(Ψ[end], Ψbonds[end])
+  testentropies[1] = entropy([s1 * s2 for s1 in storage(S1) for s2 in storage(S2)])
+  println(testentropies[1])
+  for count in 1:N÷2-1
+    U, S1, V = svd(Ψ[count] * Ψ[count+1], uniqueinds(Ψ[count], Ψ[count+1]))
+    Ψ[count] = U
+    Ψ[count+1] = S1 * V
+    Ψbonds[count+1] = commonind(U, S1)
+    U, S2, V = svd(Ψ[N-count] * Ψ[N+1-count], uniqueinds(Ψ[N+1-count], Ψ[N-count]))
+    Ψ[N+1-count] = U
+    Ψ[N-count] = S2 * V
+    Ψbonds[N+1-count] = commonind(U, S2)
+    testentropies[count+1] = entropy([s1 * s2 for s1 in storage(S1) for s2 in storage(S2)])
+  end
+
+  # subsystem = Ψ[N÷2] * Ψ[N÷2+1]
+  subsystem = δ(Ψbonds[N÷2+1], Ψbonds[N÷2+1]')
+  Ψ[N÷2+1] = prime(Ψ[N÷2+1], Ψbonds[N÷2+1])
+  for count in 0:N÷2-1
+    subsystem *= Ψ[N÷2-count]
+    subsystem *= Ψ[N÷2+1+count]
+    bulk = subsystem * conj(prime(subsystem, Ψbonds[N÷2-count], Ψbonds[N÷2+2+count]))
+    bulk *= combiner(Ψbonds[N÷2-count], Ψbonds[N÷2+2+count])
+    bulk *= combiner(Ψbonds[N÷2-count]', Ψbonds[N÷2+2+count]')
+    λ = eigvals(bulk |> matrix) |> real
+    entropies[count+1] = -sum(λ ./ sum(λ) .|> x -> abs(x) * log(abs(x)))
+  end
+
+  println("\n\ntestentropies:")
+  display(testentropies)
+  println("\n\nexactentropies:")
+  display(entropies)
 
   return entropies
 end
@@ -335,7 +379,7 @@ function genΨnocanonical(;sitenum, physdim, bonddim, withaux=true)
 end
 
 function entropytest2()
-  N = 6
+  N = 4
   # Ψ, Ψbonds, physinds = genΨ(sitenum = N, physdim = 2, bonddim = 3, rightunitary=true)
   Ψ, Ψbonds, physinds = genΨnocanonical(sitenum=N, physdim=2, bonddim=3)
   bulk = foldl(*, Ψ)
@@ -361,15 +405,19 @@ function entropytest2()
   for n in 2:2:N
     println("guee")
     _, S, _ = svd(bulk, (physinds[(N-n)÷2+1:(N+n)÷2]...))
+    display(storage(S))
+    println("\n")
     exactcenterentropies[n÷2] = entropy(storage(S))
   end
   println("yy")
-  cancenterentropies = Ψcenterentropies(Ψ, Ψbonds, physinds)
+  cancenterentropies = Ψcenterentropies2(Ψ, Ψbonds)
   println("draw!")
 
   plot([2:2:N;], exactcenterentropies, xlabel="n", ylabel="S_n^c", label="exact")
   plot!([2:2:N;], cancenterentropies, label="canonical")
   savefig("entropytest2-center.png")
+  println("\n\nveryexactentropies:")
+  display(exactcenterentropies)
 end
 
 function writeΨ(Ψ, filename)
@@ -414,6 +462,11 @@ function readwritetensor()
   for (p1, p2) in zip(Ψ, Ψ2)
     println(storage(p1) ≈ storage(p2))
   end
+end
+
+function compfor()
+  [(x, y) for x in 1:3 for y in 1:3] # direct product
+  [(x, y) for x in 1:3, y in 1:3] # matrix
 end
 
 entropytest2()

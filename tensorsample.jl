@@ -241,43 +241,52 @@ end
 function Ψcenterentropies2(_Ψ, _Ψbonds)
   N = length(_Ψ)
   entropies = Vector{Float64}(undef, N ÷ 2)
-  testentropies = Vector{Float64}(undef, N ÷ 2)
   Ψ = deepcopy(_Ψ)
   Ψbonds = deepcopy(_Ψbonds)
+  pχbonds = deepcopy(Ψbonds)
 
-  U, S1, V = svd(Ψ[1], Ψbonds[1])
-  U, S2, V = svd(Ψ[end], Ψbonds[end])
-  testentropies[1] = entropy([s1 * s2 for s1 in storage(S1) for s2 in storage(S2)])
-  println(testentropies[1])
   for count in 1:N÷2-1
     U, S1, V = svd(Ψ[count] * Ψ[count+1], uniqueinds(Ψ[count], Ψ[count+1]))
     Ψ[count] = U
     Ψ[count+1] = S1 * V
-    Ψbonds[count+1] = commonind(U, S1)
+    pχbonds[count+1] = commonind(U, S1)
     U, S2, V = svd(Ψ[N-count] * Ψ[N+1-count], uniqueinds(Ψ[N+1-count], Ψ[N-count]))
     Ψ[N+1-count] = U
     Ψ[N-count] = S2 * V
-    Ψbonds[N+1-count] = commonind(U, S2)
-    testentropies[count+1] = entropy([s1 * s2 for s1 in storage(S1) for s2 in storage(S2)])
+    pχbonds[N+1-count] = commonind(U, S2)
   end
 
-  # subsystem = Ψ[N÷2] * Ψ[N÷2+1]
-  subsystem = δ(Ψbonds[N÷2+1], Ψbonds[N÷2+1]')
-  Ψ[N÷2+1] = prime(Ψ[N÷2+1], Ψbonds[N÷2+1])
+  println("toward-center unitarized.")
+  # for (i, p) in enumerate(Ψ)
+  #   println("\n\n$i : ")
+  #   display(p)
+  # end
+
+  bulk = 1
   for count in 0:N÷2-1
-    subsystem *= Ψ[N÷2-count]
-    subsystem *= Ψ[N÷2+1+count]
-    bulk = subsystem * conj(prime(subsystem, Ψbonds[N÷2-count], Ψbonds[N÷2+2+count]))
-    bulk *= combiner(Ψbonds[N÷2-count], Ψbonds[N÷2+2+count])
-    bulk *= combiner(Ψbonds[N÷2-count]', Ψbonds[N÷2+2+count]')
-    λ = eigvals(bulk |> matrix) |> real
+    if count == 0
+      Ψ[N÷2] *= δ(pχbonds[N÷2], Ψbonds[N÷2])
+      Ψ[N÷2+1] *= δ(pχbonds[N÷2+2], Ψbonds[N÷2+2])
+    elseif count == N ÷ 2 - 1
+      Ψ[1] *= δ(pχbonds[2], Ψbonds[2])
+      Ψ[end] *= δ(pχbonds[end-1], Ψbonds[end-1])
+    else
+      Ψ[N÷2-count] *= δ(pχbonds[N÷2-count+1], Ψbonds[N÷2-count+1])
+      Ψ[N÷2-count] *= δ(pχbonds[N÷2-count], Ψbonds[N÷2-count])
+      Ψ[N÷2+1+count] *= δ(pχbonds[N÷2+1+count], Ψbonds[N÷2+1+count])
+      Ψ[N÷2+1+count] *= δ(pχbonds[N÷2+2+count], Ψbonds[N÷2+2+count])
+    end
+    bulk *= Ψ[N÷2-count]
+    bulk *= prime(Ψ[N÷2-count], Ψbonds[N÷2-count], Ψbonds[N÷2-count+1]) |> conj
+    bulk *= Ψ[N÷2+1+count]
+    bulk *= prime(Ψ[N÷2+1+count], Ψbonds[N÷2+2+count], Ψbonds[N÷2+1+count]) |> conj
+    mbulk = bulk * combiner(Ψbonds[N÷2-count], Ψbonds[N÷2+2+count]) * combiner(Ψbonds[N÷2-count]', Ψbonds[N÷2+2+count]')
+    println("\nmbulk dim: " )
+    display(mbulk)
+    println("\n")
+    λ = eigvals(mbulk |> matrix) |> real
     entropies[count+1] = -sum(λ ./ sum(λ) .|> x -> abs(x) * log(abs(x)))
   end
-
-  println("\n\ntestentropies:")
-  display(testentropies)
-  println("\n\nexactentropies:")
-  display(entropies)
 
   return entropies
 end
@@ -285,58 +294,71 @@ end
 function Ψcenterentropies(_Ψ, _Ψbonds, _physinds)
   N = length(_Ψ)
   entropies = Vector{Float64}(undef, N ÷ 2)
-  println("start")
   Ψ = deepcopy(_Ψ)
-  println("psi copy")
   Ψbonds = deepcopy(_Ψbonds)
-  println("bond copy")
   χ = dim(Ψbonds[end])
   physinds = deepcopy(_physinds)
-  println("physind copy")
   # add aux explicitly to process uniformly
   push!(physinds, Ψbonds[end])
   pushfirst!(physinds, Ψbonds[1])
+
+  tmpb = Index(dim(Ψbonds[end]))
+  replaceind!(Ψ[end], Ψbonds[end] => tmpb)
+  Ψbonds[end] = tmpb
+  tmpb = Index(dim(Ψbonds[1]))
+  replaceind!(Ψ[1], Ψbonds[1] => tmpb)
+  Ψbonds[1] = tmpb
   push!(Ψbonds, Index(1))
   pushfirst!(Ψbonds, Index(1))
   push!(Ψ, ITensor(I(χ), Ψbonds[end-1], Ψbonds[end], physinds[end]))
   pushfirst!(Ψ, ITensor(I(χ), Ψbonds[1], Ψbonds[2], physinds[1]))
 
   println("prepare complete")
+  # println("\n\n ----- initial state -----")
+  # display(physinds)
 
   # put two sites together from center and move to end(right edge) and put two sites together from center of rest... and so on
-  # center = N // 2 + 1
   for count in 0:N÷2-1
+    # center position(left of pair)
     cpos = N ÷ 2 + 1 - count
-    Ψ[cpos] *= Ψ[cpos+1]
-    C = combiner(physinds[cpos], physinds[cpos+1])
-    Ψ[cpos] *= C
-    physinds[cpos] = combinedind(C)
-    while cpos < N - 2count
-      U, S, V = svd(cpos * Ψ[cpos+2], (physinds[cpos], Ψbonds[cpos+3]))
-      Ψ[cpos+1] = U
-      Ψ[cpos] = S * V # V has physinds[cpos+2]
-      Ψbonds[cpos+1] = commonind(U, S)
-      physinds[cpos], physinds[cpos+2] = physinds[cpos+1], physinds[cpos]
+    while cpos < N + 1 - 2count
+      A, B, _, Ψbonds[cpos+2] = factorize(Ψ[cpos+1] * Ψ[cpos+2], (physinds[cpos+1], Ψbonds[cpos+3]))
+      Ψ[cpos+2] = A
+      Ψ[cpos+1] = B # B has physinds[cpos+2]
+      physinds[cpos+2], physinds[cpos+1] = physinds[cpos+1], physinds[cpos+2]
+      A, B, _, Ψbonds[cpos+1] = factorize(Ψ[cpos] * Ψ[cpos+1], (physinds[cpos], Ψbonds[cpos+2]))
+      Ψ[cpos+1] = A
+      Ψ[cpos] = B # B has physinds[cpos+2]
+      physinds[cpos+1], physinds[cpos] = physinds[cpos], physinds[cpos+1]
       cpos += 1
     end
-    deleteat!(Ψ, length(Ψ) - count)
-    deleteat!(Ψbonds, length(Ψbonds) - 1 - count)
-    deleteat!(physinds, length(physinds) - count)
+    # println("\n\n ----- count = $count -----")
+    # display(physinds)
   end
 
   println("move complete.")
+  # for (i, p) in enumerate(Ψ)
+  #   println("\n\n$i:")
+  #   display(p)
+  # end
+
+  # println("\n$(foldl(*, Ψ) * δ(Ψbonds[1], Ψbonds[end]) ≈ foldl(*, _Ψ))")
 
   for site in 1:length(Ψ)-1
     U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site], Ψ[site+1]))
     Ψ[site] = U
     Ψ[site+1] = S * V
   end
+  println("right canonical.")
   for site in length(Ψ)-1:-1:2
     U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site+1], Ψ[site]))
     Ψ[site+1] = U
     Ψ[site] = V * S
-    entropies[site-1] = entropy(storage(S))
+    if site & 1 == 0
+      entropies[(N-site)÷2+1] = entropy(storage(S))
+    end
   end
+  println("center entropies complete.")
 
   return entropies
 end
@@ -379,9 +401,9 @@ function genΨnocanonical(;sitenum, physdim, bonddim, withaux=true)
 end
 
 function entropytest2()
-  N = 4
+  N = 8
   # Ψ, Ψbonds, physinds = genΨ(sitenum = N, physdim = 2, bonddim = 3, rightunitary=true)
-  Ψ, Ψbonds, physinds = genΨnocanonical(sitenum=N, physdim=2, bonddim=3)
+  Ψ, Ψbonds, physinds = genΨnocanonical(sitenum=N, physdim=2, bonddim=6)
   bulk = foldl(*, Ψ)
 
   # exactentropies = zeros(Float64, N + 1)
@@ -405,19 +427,24 @@ function entropytest2()
   for n in 2:2:N
     println("guee")
     _, S, _ = svd(bulk, (physinds[(N-n)÷2+1:(N+n)÷2]...))
-    display(storage(S))
+    # display(storage(S))
     println("\n")
     exactcenterentropies[n÷2] = entropy(storage(S))
   end
   println("yy")
-  cancenterentropies = Ψcenterentropies2(Ψ, Ψbonds)
+  @time cancenterentropies = Ψcenterentropies(Ψ, Ψbonds, physinds)
+  @time cantrunccenterents = Ψcenterentropies2(Ψ, Ψbonds)
   println("draw!")
 
   plot([2:2:N;], exactcenterentropies, xlabel="n", ylabel="S_n^c", label="exact")
   plot!([2:2:N;], cancenterentropies, label="canonical")
+  plot!([2:2:N;], cantrunccenterents, label="power-diagonalize")
   savefig("entropytest2-center.png")
   println("\n\nveryexactentropies:")
   display(exactcenterentropies)
+  println("\n")
+  display(cancenterentropies)
+  display(cantrunccenterents)
 end
 
 function writeΨ(Ψ, filename)

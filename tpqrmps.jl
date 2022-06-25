@@ -150,9 +150,6 @@ end
 function cooldown_unitrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; measents=false, entropies=[])
   N = length(Ψcur)
   #======== left-canonical ========#
-  # U, S, V = svd(Ψprev[1] * l_h[1] |> noprime, (Ψbonds[1]))
-  # ignore U @ |aux> since nothing operate here and U works same as unit matrix.
-  # Ψcur[1] = replaceind(S, commonind(U, S) => Ψbonds[1]) * V
   Ψcur[1] = Ψprev[1]
 
   for site in 1:N-1
@@ -309,33 +306,43 @@ function innerents(_Ψ, _Ψbonds)
   entropies = Vector{Float64}(undef, N ÷ 2)
   Ψ = deepcopy(_Ψ)
   Ψbonds = deepcopy(_Ψbonds)
+  pχbonds = deepcopy(Ψbonds)
 
   for count in 1:N÷2-1
     U, S1, V = svd(Ψ[count] * Ψ[count+1], uniqueinds(Ψ[count], Ψ[count+1]))
     Ψ[count] = U
     Ψ[count+1] = S1 * V
-    Ψbonds[count+1] = commonind(U, S1)
+    pχbonds[count+1] = commonind(U, S1)
     U, S2, V = svd(Ψ[N-count] * Ψ[N+1-count], uniqueinds(Ψ[N+1-count], Ψ[N-count]))
     Ψ[N+1-count] = U
     Ψ[N-count] = S2 * V
-    Ψbonds[N+1-count] = commonind(U, S2)
+    pχbonds[N+1-count] = commonind(U, S2)
   end
 
   println("toward-center unitarized.")
+  for (i, p) in enumerate(Ψ)
+    println("\n\n$i : ")
+    display(p)
+  end
 
-  # bulk = δ(Ψbonds[N÷2+1], Ψbonds[N÷2+1]', Index(1))
-  # bulk *= prime(bulk, Ψbonds[N÷2+1], Ψbonds[N÷2+1]') |> conj
-  # Ψ[N÷2+1] = prime(Ψ[N÷2+1], Ψbonds[N÷2+1])
-  # bulk = ITensor()
   bulk = 1
   for count in 0:N÷2-1
+    if count == 0
+      Ψ[N÷2] *= δ(pχbonds[N÷2], Ψbonds[N÷2])
+      Ψ[N÷2+1] *= δ(pχbonds[N÷2+2], Ψbonds[N÷2+2])
+    elseif count == N ÷ 2 - 1
+      Ψ[1] *= δ(pχbonds[2], Ψbonds[2])
+      Ψ[end] *= δ(pχbonds[end-1], Ψbonds[end-1])
+    else
+      Ψ[N÷2-count] *= δ(pχbonds[N÷2-count+1], Ψbonds[N÷2-count+1])
+      Ψ[N÷2-count] *= δ(pχbonds[N÷2-count], Ψbonds[N÷2-count])
+      Ψ[N÷2+1+count] *= δ(pχbonds[N÷2+1+count], Ψbonds[N÷2+1+count])
+      Ψ[N÷2+1+count] *= δ(pχbonds[N÷2+2+count], Ψbonds[N÷2+2+count])
+    end
     bulk *= Ψ[N÷2-count]
     bulk *= prime(Ψ[N÷2-count], Ψbonds[N÷2-count], Ψbonds[N÷2-count+1]) |> conj
     bulk *= Ψ[N÷2+1+count]
     bulk *= prime(Ψ[N÷2+1+count], Ψbonds[N÷2+2+count], Ψbonds[N÷2+1+count]) |> conj
-    # bulk = subsystem * conj(prime(subsystem, Ψbonds[N÷2-count], Ψbonds[N÷2+2+count]))
-    # bulk *= combiner(Ψbonds[N÷2-count], Ψbonds[N÷2+2+count])
-    # bulk *= combiner(Ψbonds[N÷2-count]', Ψbonds[N÷2+2+count]')
     mbulk = bulk * combiner(Ψbonds[N÷2-count], Ψbonds[N÷2+2+count]) * combiner(Ψbonds[N÷2-count]', Ψbonds[N÷2+2+count]')
     println("\nmbulk dim: " )
     display(mbulk)
@@ -346,8 +353,9 @@ function innerents(_Ψ, _Ψbonds)
   return entropies
 end
 
-function plotents(;l, N, χ, kmax, withaux, seqtrunc=true, meastemps=[200:200:1600;], measinnerents=false)
+function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], measinnerents=false)
   d = 2 # physical dimension
+  kmax = max(meastemps)
   Ψprev, Ψbonds, physinds = genΨgauss(sitenum=N, bonddim=χ, physdim=d, withaux=withaux)
   Ψprev /= norm2(Ψprev, Ψbonds)^inv(2N)
   _, l_h = hdens_TIsing(N, physinds, l)
@@ -361,6 +369,9 @@ function plotents(;l, N, χ, kmax, withaux, seqtrunc=true, meastemps=[200:200:16
   entropies = Vector{Float64}(undef, N + 1)
 
   entsfortemp["0"] = Ψentropies(Ψprev, Ψbonds)
+  if measinnerents
+    innerentsfortemp["0"] = innerents(Ψcouple[1], Ψbonds)
+  end
   cooldown = seqtrunc ? cooldown_seqtrunc : cooldown_unitrunc
 
   for k in 1:kmax
@@ -393,7 +404,7 @@ function plotents(;l, N, χ, kmax, withaux, seqtrunc=true, meastemps=[200:200:16
   end
   plot()
   for item in entsfortemp
-    plot!([1:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)")
+    plot!([0:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)")
   end
   savefig("entropies-l=$l,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux").png")
 
@@ -411,7 +422,7 @@ function plotents(;l, N, χ, kmax, withaux, seqtrunc=true, meastemps=[200:200:16
     end
     plot()
     for item in innerentsfortemp
-      plot!([0:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)")
+      plot!([2:2:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)")
     end
     savefig("innerents-l=$l,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux").png")
   end
@@ -444,4 +455,4 @@ function plotuβs_forl()
   savefig("uβ-forl,kmax=$kmax,χ=40,N=16,withaux=$withaux,seqtrunc=$seqtrunc.png")
 end
 
-@time plotents(l=5, N=6, χ=3, kmax=10, withaux=true, meastemps=[0,5,10], measinnerents=true)
+@time plotents(l=5, N=64, χ=40, withaux=true, meastemps=[0,5,10], measinnerents=true)

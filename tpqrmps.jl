@@ -10,7 +10,7 @@ function boxmuller()
 end
 
 function unitary3ord(physind; leftbond, rightbond, rightunitary=false)
-  χ = max(dim(leftbond), dim(rightbond))
+  χ = maximum(dim(leftbond), dim(rightbond))
   d = dim(physind)
   q, _ = reshape([boxmuller() for i in 1:(χ*d)^2], (χ * d, χ * d)) |> qr
   u = reshape(q, (d, χ, d, χ))
@@ -33,8 +33,10 @@ function genΨcan(;sitenum, physdim, bonddim, withaux=true, rightunitary=false)
 end
 
 function genΨgauss(;sitenum, physdim, bonddim, withaux=true)
-  Ψbonds = siteinds(bonddim, sitenum + 1)
-  physinds = siteinds(physdim, sitenum)
+  # Ψbonds = siteinds(bonddim, sitenum + 1)
+  Ψbonds = [Index(bonddim, "Ψbond,$i") for i in 1:sitenum+1]
+  # physinds = siteinds(physdim, sitenum)
+  physinds = [Index(physdim, "physind,$i") for i in 1:sitenum]
 
   Ψ = [ITensor(reshape([boxmuller() for i in 1:bonddim^2*physdim], (physdim, bonddim, bonddim)),
         physinds[site], Ψbonds[site], Ψbonds[site+1]) for site in 1:sitenum]
@@ -50,7 +52,8 @@ function hdens_TIsing(sitenum, physinds, l)
   J = 1; g = 1
   d = dim(physinds[1])
 
-  hbonds = siteinds(3, sitenum - 1)
+  # hbonds = siteinds(3, sitenum - 1)
+  hbonds = [Index(3, "hbond,$i") for i in 1:sitenum-1]
   leftmold = zeros(d, 3, d)
   rightmold = zeros(d, 3, d)
   leftmold[:, 1, :] = rightmold[:, 3, :] = I(2)
@@ -116,7 +119,7 @@ function cooldown_seqtrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; meas
   # U, S, V = svd(Ψprev[1] * l_h[1] |> noprime, (Ψbonds[1]))
   # ignore U @ |aux> since nothing operate here and U works same as unit matrix.
   # Ψcur[1] = replaceind(S, commonind(U, S) => Ψbonds[1]) * V
-  Ψcur[1] = Ψprev[1]
+  Ψcur[1] = Ψprev[1] * l_h[1] |> noprime
 
   for site in 1:N-1
     U, S, V = svd((Ψcur[site] * Ψprev[site+1]) * l_h[site+1] |> noprime, (Dχbonds[site], physinds[site]))
@@ -144,6 +147,43 @@ function cooldown_seqtrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; meas
   if measents
     _, S, _ = svd(Ψcur[1], Ψbonds[1])
     entropies[1] = sings2ent(storage(S))
+  end
+end
+
+function cooldown_seqtrunc_rev(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; measents=false, entropies=[])
+  N = length(Ψcur)
+  #======== left-canonical ========#
+  # U, S, V = svd(Ψprev[1] * l_h[1] |> noprime, (Ψbonds[1]))
+  # ignore U @ |aux> since nothing operate here and U works same as unit matrix.
+  # Ψcur[1] = replaceind(S, commonind(U, S) => Ψbonds[1]) * V
+  Ψcur[end] = Ψprev[end] * l_h[end] |> noprime
+
+  for site in N-1:-1:1
+    U, S, V = svd((Ψcur[site] * Ψprev[site+1]) * l_h[site+1] |> noprime, (Dχbonds[site], physinds[site]))
+    Dχbonds[site+1] = commonind(U, S)
+    Ψcur[site] = U
+    Ψcur[site+1] = S * V
+  end
+
+  #======== right-canonical ========#
+  U, S, V = svd(Ψcur[1], (Ψbonds[1]))
+  # ignore U @ |aux> since nothing operate here and contraction is same as unit matrix.
+  Ψcur[1] = V * replaceind(S, commonind(S, U) => Ψbonds[1])
+  if measents
+    entropies[1] = sings2ent(storage(S))
+  end
+
+  for site in 1:N-1
+    U, S, V = svd(Ψcur[site] * Ψcur[site+1], (Ψbonds[site+2], physinds[site+1]))
+    Ψcur[site+1] = δ(Ψbonds[site+1], commonind(S, U)) * U # truncate
+    Ψcur[site] = V * S * δ(Ψbonds[site+1], commonind(S, U))
+    if measents
+      entropies[site+1] = sings2ent(storage(S))
+    end
+  end
+  if measents
+    _, S, _ = svd(Ψcur[end], Ψbonds[end])
+    entropies[end] = sings2ent(storage(S))
   end
 end
 
@@ -204,7 +244,7 @@ end
 function expectedval(Ψ, Ψbonds, physinds, mpo; diag=true, Ψ2=Ψ)
   N = length(Ψ)
   # Ψ and Ψ2 share Ψbonds
-  val= prime(Ψ[1], Ψbonds[2], physinds[1]) * mpo[1] * conj(Ψ2[1])
+  val = prime(Ψ[1], Ψbonds[2], physinds[1]) * mpo[1] * conj(Ψ2[1])
   for site in 2:N-1
     val *= prime(Ψ[site])
     val *= conj(Ψ2[site])
@@ -219,9 +259,9 @@ function expectedval(Ψ, Ψbonds, physinds, mpo; diag=true, Ψ2=Ψ)
   return val[]
 end
 
-function plotuβ(;l, kmax=100, counter=0, withaux, cansumplot, seqtrunc=true)
-  N = 16 # number of site
-  χ = 40 # virtual bond dimension of Ψ
+function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqtrunc=true)
+  # N = 16 # number of site
+  # χ = 40 # virtual bond dimension of Ψ
   d = 2 # physical dimension
   Ψprev, Ψbonds, physinds = genΨgauss(sitenum=N, bonddim=χ, physdim=d, withaux=withaux)
   norm2₀ = norm2(Ψprev, Ψbonds)
@@ -248,7 +288,7 @@ function plotuβ(;l, kmax=100, counter=0, withaux, cansumplot, seqtrunc=true)
     ratioₖₖ₊₁s[k] = sqrt(norm2ₖ)
     println("k=$k, norm2_k = $norm2ₖ")
     Ψ[k&1+1] /= norm2ₖ^inv(2N)
-    uₖs[k] = expectedval(Ψ[k&1+1], Ψbonds, physinds, hdens)
+    uₖs[k] = expectedval(Ψ[k&1+1], Ψbonds, physinds, hdens, diag=true, Ψ2=Ψ[k&1+1])
     # for canonical sum
     uₖₖ₊₁s[k] = expectedval(Ψ[k&1+1], Ψbonds, physinds, hdens, diag=false, Ψ2=Ψ[2-k&1])
     innerₖₖ₊₁s[k] = norm2(Ψ[k&1+1], Ψbonds, diag=false, Ψ2=Ψ[2-k&1])
@@ -355,7 +395,7 @@ end
 
 function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], measinnerents=false)
   d = 2 # physical dimension
-  kmax = max(meastemps)
+  kmax = maximum(meastemps)
   Ψprev, Ψbonds, physinds = genΨgauss(sitenum=N, bonddim=χ, physdim=d, withaux=withaux)
   Ψprev /= norm2(Ψprev, Ψbonds)^inv(2N)
   _, l_h = hdens_TIsing(N, physinds, l)
@@ -375,6 +415,7 @@ function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], 
   cooldown = seqtrunc ? cooldown_seqtrunc : cooldown_unitrunc
 
   for k in 1:kmax
+    println("----- k = $k -----")
     if k in meastemps
       cooldown(Ψcouple[k&1+1], Ψcouple[2-k&1], Ψbonds, Dχbonds, physinds, l_h, measents=true, entropies=entropies)
       entsfortemp["$k"] = deepcopy(entropies)
@@ -385,9 +426,10 @@ function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], 
     else
       cooldown(Ψcouple[k&1+1], Ψcouple[2-k&1], Ψbonds, Dχbonds, physinds, l_h)
     end
-    Ψnorm2 = norm2(Ψcouple[k&1+1], Ψbonds)
-    println("k=$k, Ψnorm2 = $Ψnorm2")
-    Ψcouple[k&1+1] /= Ψnorm2^inv(2N)
+    # Ψnorm2 = norm2(Ψcouple[k&1+1], Ψbonds)
+    # println("k=$k, Ψnorm2 = $Ψnorm2")
+    # println("k=$k")
+    # Ψcouple[k&1+1] /= Ψnorm2^inv(2N)
   end
   println("==== end ====")
 
@@ -435,12 +477,14 @@ function plotuβs_samel()
   withaux = true
   seqtrunc = true
   l = 5
-  kmax = 200
+  kmax = 400
+  χ = 20
+  N = 16
   for i in 1:3
-    @time plotuβ(l=l, kmax=200, counter=i, withaux=withaux, cansumplot=cansumplot, seqtrunc=seqtrunc)
+    @time plotuβ(N=N, χ=χ, l=l, kmax=200, counter=i, withaux=withaux, cansumplot=cansumplot, seqtrunc=seqtrunc)
   end
   plot(cansumplot)
-  savefig("uβ-l=$l,kmax=$kmax,χ=40,N=16,withaux=$withaux,seqtrunc=$seqtrunc.png")
+  savefig("uβ-l=$l,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc.png")
 end
 
 function plotuβs_forl()
@@ -455,4 +499,5 @@ function plotuβs_forl()
   savefig("uβ-forl,kmax=$kmax,χ=40,N=16,withaux=$withaux,seqtrunc=$seqtrunc.png")
 end
 
-@time plotents(l=5, N=64, χ=40, withaux=true, meastemps=[0,5,10], measinnerents=true)
+@time plotents(l=5, N=64, χ=40, withaux=true, meastemps=[0,3], measinnerents=true)
+# @time plotuβs_samel()

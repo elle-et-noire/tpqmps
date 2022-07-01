@@ -2,17 +2,12 @@ using ITensors
 using LinearAlgebra
 using Plots
 using Printf
-
-function boxmuller()
-  x = rand()
-  y = rand()
-  return sqrt(-2 * log(x)) * exp(2pi * im * y)
-end
+using Random
 
 function unitary3ord(physind; leftbond, rightbond, rightunitary=false)
   χ = maximum(dim(leftbond), dim(rightbond))
   d = dim(physind)
-  q, _ = reshape([boxmuller() for i in 1:(χ*d)^2], (χ * d, χ * d)) |> qr
+  q, _ = randn(MersenneTwister(1234), ComplexF64, (χ * d, χ * d)) |> qr
   u = reshape(q, (d, χ, d, χ))
   if !rightunitary
     return ITensor(u[:, 1:dim(leftbond), 1, 1:dim(rightbond)], physind, leftbond, rightbond) # leftunitary
@@ -33,17 +28,16 @@ function genΨcan(;sitenum, physdim, bonddim, withaux=true, rightunitary=false)
 end
 
 function genΨgauss(;sitenum, physdim, bonddim, withaux=true)
-  # Ψbonds = siteinds(bonddim, sitenum + 1)
-  Ψbonds = [Index(bonddim, "Ψbond,$i") for i in 1:sitenum+1]
-  # physinds = siteinds(physdim, sitenum)
-  physinds = [Index(physdim, "physind,$i") for i in 1:sitenum]
+  rng = MersenneTwister(1234)
+  Ψbonds = siteinds(bonddim, sitenum + 1)
+  physinds = siteinds(physdim, sitenum)
 
-  Ψ = [ITensor(reshape([boxmuller() for i in 1:bonddim^2*physdim], (physdim, bonddim, bonddim)),
+  Ψ = [ITensor(randn(rng, ComplexF64, (physdim, bonddim, bonddim)),
         physinds[site], Ψbonds[site], Ψbonds[site+1]) for site in 1:sitenum]
   if !withaux
     Ψbonds[1], Ψbonds[end] = Index(1), Index(1)
-    Ψ[1] = ITensor(reshape([boxmuller() for i in 1:bonddim*physdim], (physdim, bonddim)), physinds[1], Ψbonds[1], Ψbonds[2])
-    Ψ[end] = ITensor(reshape([boxmuller() for i in 1:bonddim*physdim], (physdim, bonddim)), physinds[end], Ψbonds[end-1], Ψbonds[end])
+    Ψ[1] = ITensor(randn(rng, ComplexF64, (physdim, bonddim)), physinds[1], Ψbonds[1], Ψbonds[2])
+    Ψ[end] = ITensor(randn(rng, ComplexF64, (physdim, bonddim)), physinds[end], Ψbonds[end-1], Ψbonds[end])
   end
   return Ψ, Ψbonds, physinds
 end
@@ -52,7 +46,6 @@ function hdens_TIsing(sitenum, physinds, l)
   J = 1; g = 1
   d = dim(physinds[1])
 
-  # hbonds = siteinds(3, sitenum - 1)
   hbonds = [Index(3, "hbond,$i") for i in 1:sitenum-1]
   leftmold = zeros(d, 3, d)
   rightmold = zeros(d, 3, d)
@@ -314,7 +307,7 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqt
     uβs[i] = real(expval) / real(nrm2)
   end
 
-  plot!(cansumplot, kBT, uβs, xlabel="kBT", ylabel="E/N", label="l=$l,(No.$counter)", legend = :topleft)
+  plot!(cansumplot, kBT, uβs, xlabel="kBT", ylabel="E/N", label="l=$l,(No.$counter)", legend = :outerleft)
 
   open("uβ-l=$l,χ=$χ,N=$N,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux"),No$counter.txt", "w") do fp
     content = ""
@@ -387,6 +380,10 @@ function innerents(_Ψ, _Ψbonds)
     println("\nmbulk dim: " )
     display(mbulk)
     λ = eigvals(mbulk |> matrix) |> real
+    nrm = sum(λ)
+    if nrm == 0
+      nrm = 1
+    end
     entropies[count+1] = -sum(λ ./ sum(λ) .|> x -> abs(x) * log(abs(x)))
   end
 
@@ -426,10 +423,10 @@ function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], 
     else
       cooldown(Ψcouple[k&1+1], Ψcouple[2-k&1], Ψbonds, Dχbonds, physinds, l_h)
     end
-    # Ψnorm2 = norm2(Ψcouple[k&1+1], Ψbonds)
-    # println("k=$k, Ψnorm2 = $Ψnorm2")
-    # println("k=$k")
-    # Ψcouple[k&1+1] /= Ψnorm2^inv(2N)
+    Ψnorm2 = norm2(Ψcouple[k&1+1], Ψbonds)
+    println("k=$k, Ψnorm2 = $Ψnorm2")
+    println("k=$k")
+    Ψcouple[k&1+1] /= Ψnorm2^inv(2N)
   end
   println("==== end ====")
 
@@ -445,8 +442,8 @@ function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], 
     write(fp, content)
   end
   plot()
-  for item in entsfortemp
-    plot!([0:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)")
+  for item in sort(entsfortemp |> collect)
+    plot!([0:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)", legend = :outerleft)
   end
   savefig("entropies-l=$l,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux").png")
 
@@ -463,8 +460,8 @@ function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], 
       write(fp, content)
     end
     plot()
-    for item in innerentsfortemp
-      plot!([2:2:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)")
+    for item in sort(innerentsfortemp |> collect)
+      plot!([2:2:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)", legend = :outerleft)
     end
     savefig("innerents-l=$l,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux").png")
   end
@@ -489,15 +486,17 @@ end
 
 function plotuβs_forl()
   cansumplot = plot()
-  kmax = 200
+  kmax = 500
   seqtrunc = true
   withaux = true
-  for l in [5]
-    plotuβ(l=l, kmax=kmax, withaux=withaux, cansumplot=cansumplot, seqtrunc=seqtrunc)
+  N = 16
+  χ = 40
+  for l in [2,8,32]
+    plotuβ(N=N, χ=χ, l=l, kmax=kmax, withaux=withaux, cansumplot=cansumplot, seqtrunc=seqtrunc)
   end
   plot(cansumplot)
-  savefig("uβ-forl,kmax=$kmax,χ=40,N=16,withaux=$withaux,seqtrunc=$seqtrunc.png")
+  savefig("uβ-forl,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc.png")
 end
 
-@time plotents(l=5, N=64, χ=40, withaux=true, meastemps=[0,3], measinnerents=true)
-# @time plotuβs_samel()
+@time plotents(l=5, N=8, χ=20, withaux=false, meastemps=[0:5:10;], measinnerents=true)
+# @time plotuβs_forl()

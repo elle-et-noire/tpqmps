@@ -496,4 +496,92 @@ function compfor()
   [(x, y) for x in 1:3, y in 1:3] # matrix
 end
 
-entropytest2()
+
+function norm2(Ψ, Ψbonds; diag=true, Ψ2=Ψ)
+  N = length(Ψ)
+  ret = prime(Ψ[1], Ψbonds[2]) * conj(Ψ2[1])
+  for site in 2:N-1
+    ret *= prime(Ψ[site], Ψbonds[site], Ψbonds[site+1])
+    ret *= conj(Ψ2[site])
+  end
+  ret *= prime(Ψ[end], Ψbonds[end-1])
+  ret *= conj(Ψ2[end])
+  if diag
+    return real(ret[])
+  end
+  return ret[]
+end
+
+function cantest()
+  N = 8
+  χ = 20
+  Ψ, Ψbonds, physinds = genΨnocanonical(sitenum=N, physdim=2, bonddim=χ, withaux=false)
+  Ψ /= norm2(Ψ, Ψbonds)^inv(2N)
+
+  Ψ2 = deepcopy(Ψ)
+  Ψ2bonds = deepcopy(Ψbonds)
+  Ψ2bonds[1] = Ψbonds[1]
+  Ψ2bonds[end] = Ψbonds[end]
+  for site in 1:N÷2-1
+    Q, R = qr(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site], Ψ[site+1]))
+    Ψ2[site] = Q
+    Ψ2[site+1] = R
+    Ψ2bonds[site+1] = commonind(Q, R)
+
+    Q, R = qr(Ψ[N+1-site] * Ψ[N-site], uniqueinds(Ψ[N+1-site], Ψ[N-site]))
+    Ψ2[N+1-site] = Q
+    Ψ2[N-site] = R
+    Ψ2bonds[N+1-site] = commonind(Q, R)
+  end
+  Ψ2bonds[N÷2+1] = commonind(Ψ2[N÷2], Ψ2[N÷2+1])
+  Ucent, Scent, Vcent = svd(Ψ2[N÷2] * Ψ2[N÷2+1], uniqueinds(Ψ2[N÷2], Ψ2[N÷2+1]))
+  # display(Scent |> storage)
+  # println("\n----- comparison -----")
+  # println(sum(storage(Scent).^2))
+  # println(norm2(Ψ2, Ψ2bonds))
+  sqrtScent = ITensor(sqrt.(Scent |> matrix), inds(Scent))
+
+  entstry = zeros(Float64, N - 1)
+  entstry[N÷2] = entropy(Scent |> storage)
+  Ψhalv = deepcopy(Ψ2)
+  Ψhalv[N÷2] = Ucent * sqrtScent
+  Ψhalvbonds = similar(Ψ2bonds)
+  Ψhalvbonds[1] = Ψ2bonds[1]
+  Ψhalvbonds[end] = Ψ2bonds[end]
+  # Ψhalvbonds[N÷2+1] = Ψ2bonds[N÷2+1]
+  Ψhalvbonds[N÷2+1] = commonind(Scent, Vcent)
+  for site in N÷2-1:-1:1
+    U, S, V = svd(Ψhalv[site] * Ψhalv[site+1], uniqueinds(Ψhalv[site+1], Ψhalv[site]))
+    Ψhalv[site] = S * V
+    Ψhalv[site+1] = U
+    entstry[site] = entropy(S |> storage)
+    Ψhalvbonds[site+1] = commonind(U, S)
+  end
+
+  Ψhalv[1+N÷2] = sqrtScent * Vcent
+  replaceind!(Ψhalv[1+N÷2], commonind(Ucent, Scent) => Ψhalvbonds[N÷2+1])
+  for site in 1+N÷2:N-1
+    U, S, V = svd(Ψhalv[site] * Ψhalv[site+1], uniqueinds(Ψhalv[site], Ψhalv[site+1]))
+    Ψhalv[site] = U
+    Ψhalv[site+1] = S * V
+    entstry[site] = entropy(S |> storage)
+    Ψhalvbonds[site+1] = commonind(U, S)
+  end
+
+  entΨ1 = Ψentropies(Ψ2, Ψ2bonds)
+  entΨhalv = Ψentropies(Ψhalv, Ψhalvbonds)
+  plot([1:N-1;], entstry, xlabel="bond", ylabel="entropy", label="entstry")
+  plot!([0:N;], entΨ1, xlabel="bond", ylabel="entropy", label="entΨ1")
+  plot!([0:N;], entΨhalv, xlabel="bond", ylabel="entropy", label="entΨhalv")
+  savefig("entropytest.png")
+  println("\n entstry:")
+  display(entstry)
+  println("\n\n entΨ1:")
+  display(entΨ1)
+  println("\n\n entΨhalv:")
+  display(entΨhalv)
+end
+
+
+# entropytest2()
+cantest()

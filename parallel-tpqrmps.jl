@@ -2,17 +2,14 @@ using ITensors
 using LinearAlgebra
 using Plots
 using Printf
-
-function boxmuller()
-  x = rand()
-  y = rand()
-  return sqrt(-2 * log(x)) * exp(2pi * im * y)
-end
+using Random
+using Base.Threads
+@show nthreads()
 
 function unitary3ord(physind; leftbond, rightbond, rightunitary=false)
   χ = maximum(dim(leftbond), dim(rightbond))
   d = dim(physind)
-  q, _ = reshape([boxmuller() for i in 1:(χ*d)^2], (χ * d, χ * d)) |> qr
+  q, _ = randn(MersenneTwister(1234), ComplexF64, (χ * d, χ * d)) |> qr
   u = reshape(q, (d, χ, d, χ))
   if !rightunitary
     return ITensor(u[:, 1:dim(leftbond), 1, 1:dim(rightbond)], physind, leftbond, rightbond) # leftunitary
@@ -33,15 +30,16 @@ function genΨcan(;sitenum, physdim, bonddim, withaux=true, rightunitary=false)
 end
 
 function genΨgauss(;sitenum, physdim, bonddim, withaux=true)
+  rng = MersenneTwister(1234)
   Ψbonds = siteinds(bonddim, sitenum + 1)
   physinds = siteinds(physdim, sitenum)
 
-  Ψ = [ITensor(reshape([boxmuller() for i in 1:bonddim^2*physdim], (physdim, bonddim, bonddim)),
+  Ψ = [ITensor(randn(rng, ComplexF64, (physdim, bonddim, bonddim)),
         physinds[site], Ψbonds[site], Ψbonds[site+1]) for site in 1:sitenum]
   if !withaux
     Ψbonds[1], Ψbonds[end] = Index(1), Index(1)
-    Ψ[1] = ITensor(reshape([boxmuller() for i in 1:bonddim*physdim], (physdim, bonddim)), physinds[1], Ψbonds[1], Ψbonds[2])
-    Ψ[end] = ITensor(reshape([boxmuller() for i in 1:bonddim*physdim], (physdim, bonddim)), physinds[end], Ψbonds[end-1], Ψbonds[end])
+    Ψ[1] = ITensor(randn(rng, ComplexF64, (physdim, bonddim)), physinds[1], Ψbonds[1], Ψbonds[2])
+    Ψ[end] = ITensor(randn(rng, ComplexF64, (physdim, bonddim)), physinds[end], Ψbonds[end-1], Ψbonds[end])
   end
   return Ψ, Ψbonds, physinds
 end

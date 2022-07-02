@@ -3,6 +3,8 @@ using LinearAlgebra
 using Plots
 using Printf
 using Random
+using Base.Threads
+@show nthreads()
 
 function unitary3ord(physind; leftbond, rightbond, rightunitary=false)
   χ = maximum(dim(leftbond), dim(rightbond))
@@ -106,81 +108,45 @@ function Ψentropies(_Ψ, Ψbonds)
   return entropies
 end
 
-function cooldown_seqtrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; measents=false, entropies=[])
+function cooldown_seqtrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; measents=false, entropies=[], rev=false)
   N = length(Ψcur)
+  atΨ(i) = rev ? reverseind(Ψcur, i) : i
+  atbond(i) = rev ? reverseind(Ψbonds, i) : i
+  ath(i) = rev ? reverseind(l_h, i) : i
+  atpind(i) = rev ? reverseind(physinds, i) : i
   #======== left-canonical ========#
-  # U, S, V = svd(Ψprev[1] * l_h[1] |> noprime, (Ψbonds[1]))
-  # ignore U @ |aux> since nothing operate here and U works same as unit matrix.
-  # Ψcur[1] = replaceind(S, commonind(U, S) => Ψbonds[1]) * V
-  Ψcur[1] = Ψprev[1] * l_h[1] |> noprime
+  Ψcur[1|>atΨ] = Ψprev[1|>atΨ] * l_h[1|>ath] |> noprime
 
   for site in 1:N-1
-    U, S, V = svd((Ψcur[site] * Ψprev[site+1]) * l_h[site+1] |> noprime, (Dχbonds[site], physinds[site]))
-    Dχbonds[site+1] = commonind(U, S)
-    Ψcur[site] = U
-    Ψcur[site+1] = S * V
+    Q, R = qr((Ψcur[site|>atΨ] * Ψprev[site+1|>atΨ]) * l_h[site+1|>ath] |> noprime, (Dχbonds[site|>atbond], physinds[site|>atpind]))
+    Dχbonds[site+1|>atbond] = commonind(Q, R)
+    Ψcur[site|>atΨ] = Q
+    Ψcur[site+1|>atΨ] = R
   end
 
   #======== right-canonical ========#
-  U, S, V = svd(Ψcur[end], (Ψbonds[end]))
+  U, S, V = svd(Ψcur[end|>atΨ], (Ψbonds[end|>atΨ]))
   # ignore U @ |aux> since nothing operate here and contraction is same as unit matrix.
-  Ψcur[end] = V * replaceind(S, commonind(S, U) => Ψbonds[end])
+  Ψcur[end|>atΨ] = V * replaceind(S, commonind(S, U) => Ψbonds[end|>atbond])
   if measents
-    entropies[end] = sings2ent(storage(S))
+    entropies[end|>atbond] = sings2ent(storage(S))
   end
 
   for site in N-1:-1:1
-    U, S, V = svd(Ψcur[site] * Ψcur[site+1], (Ψbonds[site+2], physinds[site+1]))
-    Ψcur[site+1] = δ(Ψbonds[site+1], commonind(S, U)) * U # truncate
-    Ψcur[site] = V * S * δ(Ψbonds[site+1], commonind(S, U))
+    U, S, V = svd(Ψcur[site|>atΨ] * Ψcur[site+1|>atΨ], (Ψbonds[site+2|>atbond], physinds[site+1|>atpind]))
+    Ψcur[site+1|>atΨ] = δ(Ψbonds[site+1|>atbond], commonind(S, U)) * U # truncate
+    Ψcur[site|>atΨ] = V * S * δ(Ψbonds[site+1|>atbond], commonind(S, U))
     if measents
-      entropies[site+1] = sings2ent(storage(S))
+      entropies[site+1|>atbond] = sings2ent(storage(S))
     end
   end
   if measents
-    _, S, _ = svd(Ψcur[1], Ψbonds[1])
-    entropies[1] = sings2ent(storage(S))
+    _, S, _ = svd(Ψcur[1|>atΨ], Ψbonds[1|>atΨ])
+    entropies[1|>atbond] = sings2ent(storage(S))
   end
 end
 
-function cooldown_seqtrunc_rev(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; measents=false, entropies=[])
-  N = length(Ψcur)
-  #======== left-canonical ========#
-  # U, S, V = svd(Ψprev[1] * l_h[1] |> noprime, (Ψbonds[1]))
-  # ignore U @ |aux> since nothing operate here and U works same as unit matrix.
-  # Ψcur[1] = replaceind(S, commonind(U, S) => Ψbonds[1]) * V
-  Ψcur[end] = Ψprev[end] * l_h[end] |> noprime
-
-  for site in N-1:-1:1
-    U, S, V = svd((Ψcur[site] * Ψprev[site+1]) * l_h[site+1] |> noprime, (Dχbonds[site], physinds[site]))
-    Dχbonds[site+1] = commonind(U, S)
-    Ψcur[site] = U
-    Ψcur[site+1] = S * V
-  end
-
-  #======== right-canonical ========#
-  U, S, V = svd(Ψcur[1], (Ψbonds[1]))
-  # ignore U @ |aux> since nothing operate here and contraction is same as unit matrix.
-  Ψcur[1] = V * replaceind(S, commonind(S, U) => Ψbonds[1])
-  if measents
-    entropies[1] = sings2ent(storage(S))
-  end
-
-  for site in 1:N-1
-    U, S, V = svd(Ψcur[site] * Ψcur[site+1], (Ψbonds[site+2], physinds[site+1]))
-    Ψcur[site+1] = δ(Ψbonds[site+1], commonind(S, U)) * U # truncate
-    Ψcur[site] = V * S * δ(Ψbonds[site+1], commonind(S, U))
-    if measents
-      entropies[site+1] = sings2ent(storage(S))
-    end
-  end
-  if measents
-    _, S, _ = svd(Ψcur[end], Ψbonds[end])
-    entropies[end] = sings2ent(storage(S))
-  end
-end
-
-function cooldown_unitrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; measents=false, entropies=[])
+function cooldown_unitrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; measents=false, entropies=[], rev=false)
   N = length(Ψcur)
   #======== left-canonical ========#
   Ψcur[1] = Ψprev[1]
@@ -336,20 +302,20 @@ end
 
 function innerents(_Ψ, _Ψbonds)
   N = length(_Ψ)
-  entropies = Vector{Float64}(undef, N ÷ 2)
+  
   Ψ = deepcopy(_Ψ)
   Ψbonds = deepcopy(_Ψbonds)
   pχbonds = deepcopy(Ψbonds)
 
   for count in 1:N÷2-1
-    U, S1, V = svd(Ψ[count] * Ψ[count+1], uniqueinds(Ψ[count], Ψ[count+1]))
-    Ψ[count] = U
-    Ψ[count+1] = S1 * V
-    pχbonds[count+1] = commonind(U, S1)
-    U, S2, V = svd(Ψ[N-count] * Ψ[N+1-count], uniqueinds(Ψ[N+1-count], Ψ[N-count]))
-    Ψ[N+1-count] = U
-    Ψ[N-count] = S2 * V
-    pχbonds[N+1-count] = commonind(U, S2)
+    Q, R = qr(Ψ[count] * Ψ[count+1], uniqueinds(Ψ[count], Ψ[count+1]))
+    Ψ[count] = Q
+    Ψ[count+1] = R
+    pχbonds[count+1] = commonind(Q, R)
+    Q, R = qr(Ψ[N-count] * Ψ[N+1-count], uniqueinds(Ψ[N+1-count], Ψ[N-count]))
+    Ψ[N+1-count] = Q
+    Ψ[N-count] = R
+    pχbonds[N+1-count] = commonind(Q, R)
   end
 
   println("toward-center unitarized.")
@@ -359,6 +325,8 @@ function innerents(_Ψ, _Ψbonds)
   end
 
   bulk = 1
+  # entropies = Vector{Float64}(undef, N ÷ 2)
+  enttasks = Vector{Task}(undef, N ÷ 2)
   for count in 0:N÷2-1
     if count == 0
       Ψ[N÷2] *= δ(pχbonds[N÷2], Ψbonds[N÷2])
@@ -377,20 +345,24 @@ function innerents(_Ψ, _Ψbonds)
     bulk *= Ψ[N÷2+1+count]
     bulk *= prime(Ψ[N÷2+1+count], Ψbonds[N÷2+2+count], Ψbonds[N÷2+1+count]) |> conj
     mbulk = bulk * combiner(Ψbonds[N÷2-count], Ψbonds[N÷2+2+count]) * combiner(Ψbonds[N÷2-count]', Ψbonds[N÷2+2+count]')
-    println("\nmbulk dim: " )
-    display(mbulk)
-    λ = eigvals(mbulk |> matrix) |> real
-    nrm = sum(λ)
-    if nrm == 0
-      nrm = 1
+    let mbulk = mbulk
+      enttasks[count+1] = Threads.@spawn begin
+        # println("\nmbulk dim: ")
+        # display(mbulk)
+        λ = eigvals(mbulk |> matrix) |> real
+        nrm = sum(λ)
+        if nrm == 0
+          nrm = 1
+        end
+        -sum(λ ./ sum(λ) .|> x -> abs(x) * log(abs(x)))
+      end
     end
-    entropies[count+1] = -sum(λ ./ sum(λ) .|> x -> abs(x) * log(abs(x)))
   end
 
-  return entropies
+  return fetch.(enttasks)
 end
 
-function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], measinnerents=false)
+function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], measinnerents=false, rev=false)
   d = 2 # physical dimension
   kmax = maximum(meastemps)
   Ψprev, Ψbonds, physinds = genΨgauss(sitenum=N, bonddim=χ, physdim=d, withaux=withaux)
@@ -414,7 +386,7 @@ function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], 
   for k in 1:kmax
     println("----- k = $k -----")
     if k in meastemps
-      cooldown(Ψcouple[k&1+1], Ψcouple[2-k&1], Ψbonds, Dχbonds, physinds, l_h, measents=true, entropies=entropies)
+      cooldown(Ψcouple[k&1+1], Ψcouple[2-k&1], Ψbonds, Dχbonds, physinds, l_h, measents=true, entropies=entropies, rev=rev)
       entsfortemp["$k"] = deepcopy(entropies)
       if measinnerents
         innerentsfortemp["$k"] = innerents(Ψcouple[k&1+1], Ψbonds)
@@ -463,7 +435,7 @@ function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], 
     for item in sort(innerentsfortemp |> collect)
       plot!([2:2:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)", legend = :outerleft)
     end
-    savefig("innerents-l=$l,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux").png")
+    savefig("innerents-l=$l,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux")$(rev ? ",rev" : "").png")
   end
 
   println("\n\n==== time record ====")
@@ -498,5 +470,5 @@ function plotuβs_forl()
   savefig("uβ-forl,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc.png")
 end
 
-@time plotents(l=5, N=8, χ=20, withaux=false, meastemps=[0:5:10;], measinnerents=true)
+@time plotents(l=5, N=64, χ=40, withaux=true, meastemps=[0:100:200;], measinnerents=true)
 # @time plotuβs_forl()

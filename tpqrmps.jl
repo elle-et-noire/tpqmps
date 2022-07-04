@@ -9,7 +9,7 @@ using Base.Threads
 function unitary3ord(physind; leftbond, rightbond, rightunitary=false)
   χ = maximum(dim(leftbond), dim(rightbond))
   d = dim(physind)
-  q, _ = randn(MersenneTwister(1234), ComplexF64, (χ * d, χ * d)) |> qr
+  q, _ = randn(MersenneTwister(), ComplexF64, (χ * d, χ * d)) |> qr
   u = reshape(q, (d, χ, d, χ))
   if !rightunitary
     return ITensor(u[:, 1:dim(leftbond), 1, 1:dim(rightbond)], physind, leftbond, rightbond) # leftunitary
@@ -30,7 +30,7 @@ function genΨcan(;sitenum, physdim, bonddim, withaux=true, rightunitary=false)
 end
 
 function genΨgauss(;sitenum, physdim, bonddim, withaux=true)
-  rng = MersenneTwister(1234)
+  rng = MersenneTwister()
   Ψbonds = siteinds(bonddim, sitenum + 1)
   physinds = siteinds(physdim, sitenum)
 
@@ -44,6 +44,7 @@ function genΨgauss(;sitenum, physdim, bonddim, withaux=true)
   return Ψ, Ψbonds, physinds
 end
 
+"make hamiltonian density and l - h of transverse ising model."
 function hdens_TIsing(sitenum, physinds, l)
   J = 1; g = 1
   d = dim(physinds[1])
@@ -52,26 +53,27 @@ function hdens_TIsing(sitenum, physinds, l)
   leftmold = zeros(d, 3, d)
   rightmold = zeros(d, 3, d)
   leftmold[:, 1, :] = rightmold[:, 3, :] = I(2)
-  leftmold[:, 2, :] = rightmold[:, 2, :] = sqrt(J) * [1 0;0 -1]
-  leftmold[:, 3, :] = rightmold[:, 1, :] = -g * [0 1;1 0]
-  rightmold2 = deepcopy(rightmold)
-  rightmold2[:, 1, :] -= l * I(2) # I ⊗ ⋯ ⊗ (-l*I+σx)
+  leftmold[:, 2, :] = rightmold[:, 2, :] = sqrt(J / sitenum) * [1 0;0 -1]
+  leftmold[:, 3, :] = rightmold[:, 1, :] = -(g / sitenum) * [0 1;1 0]
   h_left = ITensor(leftmold, physinds[1], hbonds[1], physinds[1]')
-  h_right = ITensor(rightmold / sitenum, physinds[end], hbonds[end], physinds[end]') # coef "N" smashed in rH
-  l_h_right = ITensor(-rightmold2 / sitenum, physinds[end], hbonds[end], physinds[end]') # coef "-N" smashed in rH2
+  h_right = ITensor(rightmold , physinds[end], hbonds[end], physinds[end]') # coef "N" smashed in rH
+
   middlemold = zeros(3, d, 3, d)
   middlemold[1, :, 1, :] = I(2)
   middlemold[3, :, 3, :] = I(2)
-  middlemold[1, :, 2, :] = middlemold[2, :, 3, :] = sqrt(J) * [1 0;0 -1]
-  middlemold[1, :, 3, :] = -g * [0 1;1 0]
-  # l - h
-  l_h = [ITensor(middlemold, hbonds[i-1], physinds[i], hbonds[i], physinds[i]') for i in 2:sitenum-1]
-  pushfirst!(l_h, h_left)
-  push!(l_h, l_h_right)
-  # h : hamiltonian density
-  hdens = deepcopy(l_h)
-  hdens[end] = h_right
+  middlemold[1, :, 2, :] = middlemold[2, :, 3, :] = sqrt(J / sitenum) * [1 0;0 -1]
+  middlemold[1, :, 3, :] = -(g / sitenum) * [0 1;1 0]
 
+  hdens = [ITensor(middlemold, hbonds[i-1], physinds[i], hbonds[i], physinds[i]') for i in 2:sitenum-1]
+  pushfirst!(hdens, h_left)
+  push!(hdens, h_right)
+
+  rightmold2 = deepcopy(rightmold)
+  rightmold2[:, 1, :] -= l * I(2) # I ⊗ ⋯ ⊗ (-l*I+σx)
+  l_h_right = ITensor(-rightmold2, physinds[end], hbonds[end], physinds[end]') # coef "-1" smashed in rH2
+
+  l_h = deepcopy(hdens)
+  l_h[end] = l_h_right
   return (hdens, l_h)
 end
 
@@ -81,17 +83,18 @@ function sings2ent(λ)
   return -sum(λ ./ nrm .|> x -> 2x^2*log(x))
 end
 
+
 function Ψentropies(_Ψ, Ψbonds)
   N = length(_Ψ)
   entropies = Vector{Float64}(undef, N + 1)
   Ψ = deepcopy(_Ψ)
 
-  U, S, V = svd(Ψ[1], Ψbonds[1])
-  Ψ[1] = replaceind(S, commonind(U, S) => Ψbonds[1]) * V
+  # Q, R = qr(Ψ[1], Ψbonds[1])
+  # Ψ[1] = replaceind(Q, commonind(R) => Ψbonds[1])
   for site in 1:N-1
-    U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site], Ψ[site+1]))
-    Ψ[site] = U
-    Ψ[site+1] = S * V
+    Q, R = qr(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site], Ψ[site+1]))
+    Ψ[site] = Q
+    Ψ[site+1] = R
   end
   U, S, V = svd(Ψ[end], Ψbonds[end])
   Ψ[end] = V * replaceind(S, commonind(S, U) => Ψbonds[end])
@@ -125,7 +128,7 @@ function cooldown_seqtrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; meas
   end
 
   #======== right-canonical ========#
-  U, S, V = svd(Ψcur[end|>atΨ], (Ψbonds[end|>atΨ]))
+  U, S, V = svd(Ψcur[end|>atΨ], (Ψbonds[end|>atbond]))
   # ignore U @ |aux> since nothing operate here and contraction is same as unit matrix.
   Ψcur[end|>atΨ] = V * replaceind(S, commonind(S, U) => Ψbonds[end|>atbond])
   if measents
@@ -185,15 +188,40 @@ function cooldown_unitrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; meas
   end
 end
 
+# function norm2_(Ψ, Ψbonds; diag=true, Ψ2=Ψ)
+#   N = length(Ψ)
+#   ret = prime(Ψ[1], Ψbonds[2]) * conj(Ψ2[1])
+#   for site in 2:N-1
+#     ret *= prime(Ψ[site], Ψbonds[site], Ψbonds[site+1])
+#     ret *= conj(Ψ2[site])
+#   end
+#   ret *= prime(Ψ[end], Ψbonds[end-1])
+#   ret *= conj(Ψ2[end])
+#   if diag
+#     return real(ret[])
+#   end
+#   return ret[]
+# end
+
 function norm2(Ψ, Ψbonds; diag=true, Ψ2=Ψ)
   N = length(Ψ)
-  ret = prime(Ψ[1], Ψbonds[2]) * conj(Ψ2[1])
-  for site in 2:N-1
-    ret *= prime(Ψ[site], Ψbonds[site], Ψbonds[site+1])
-    ret *= conj(Ψ2[site])
+  leftcont = Threads.@spawn begin
+    left = prime(Ψ[1], Ψbonds[2]) * conj(Ψ2[1])
+    for site in 2:N÷2
+      left *= prime(Ψ[site], Ψbonds[site], Ψbonds[site+1])
+      left *= conj(Ψ2[site])
+    end
+    left
   end
-  ret *= prime(Ψ[end], Ψbonds[end-1])
-  ret *= conj(Ψ2[end])
+  rightcont = Threads.@spawn begin
+    right = prime(Ψ[reverseind(Ψ, 1)], Ψbonds[reverseind(Ψbonds, 2)]) * conj(Ψ2[reverseind(Ψ2, 1)])
+    for site in 2:N÷2
+      right *= prime(Ψ[reverseind(Ψ, site)], Ψbonds[reverseind(Ψbonds, site)], Ψbonds[reverseind(Ψbonds, site+1)])
+      right *= conj(Ψ2[reverseind(Ψ2, site)])
+    end
+    right
+  end
+  ret = fetch(leftcont) * fetch(rightcont)
   if diag
     return real(ret[])
   end
@@ -203,24 +231,50 @@ end
 function expectedval(Ψ, Ψbonds, physinds, mpo; diag=true, Ψ2=Ψ)
   N = length(Ψ)
   # Ψ and Ψ2 share Ψbonds
-  val = prime(Ψ[1], Ψbonds[2], physinds[1]) * mpo[1] * conj(Ψ2[1])
-  for site in 2:N-1
-    val *= prime(Ψ[site])
-    val *= conj(Ψ2[site])
-    val *= mpo[site]
+  leftcont = Threads.@spawn begin
+    left = prime(Ψ[1], Ψbonds[2], physinds[1]) * mpo[1] * conj(Ψ2[1])
+    for site in 2:N÷2
+      left *= prime(Ψ[site])
+      left *= conj(Ψ2[site])
+      left *= mpo[site]
+    end
+    left
   end
-  val *= prime(Ψ[end], Ψbonds[end-1], physinds[end])
-  val *= conj(Ψ2[end])
-  val *= mpo[end]
+  rightcont = Threads.@spawn begin
+    right = prime(Ψ[reverseind(Ψ, 1)], Ψbonds[reverseind(Ψbonds, 2)], physinds[reverseind(physinds, 1)]) * mpo[reverseind(mpo, 1)] * conj(Ψ2[reverseind(Ψ2, 1)])
+    for site in 2:N÷2
+      right *= prime(Ψ[reverseind(Ψ, site)])
+      right *= conj(Ψ2[reverseind(Ψ2, site)])
+      right *= mpo[reverseind(mpo, site)]
+    end
+    right
+  end
+  ret = fetch(leftcont) * fetch(rightcont)
   if diag
-    return real(val[])
+    return real(ret[])
   end
-  return val[]
+  return ret[]
 end
 
+# function expectedval_(Ψ, Ψbonds, physinds, mpo; diag=true, Ψ2=Ψ)
+#   N = length(Ψ)
+#   # Ψ and Ψ2 share Ψbonds
+#   val = prime(Ψ[1], Ψbonds[2], physinds[1]) * mpo[1] * conj(Ψ2[1])
+#   for site in 2:N-1
+#     val *= prime(Ψ[site])
+#     val *= conj(Ψ2[site])
+#     val *= mpo[site]
+#   end
+#   val *= prime(Ψ[end], Ψbonds[end-1], physinds[end])
+#   val *= conj(Ψ2[end])
+#   val *= mpo[end]
+#   if diag
+#     return real(val[])
+#   end
+#   return val[]
+# end
+
 function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqtrunc=true)
-  # N = 16 # number of site
-  # χ = 40 # virtual bond dimension of Ψ
   d = 2 # physical dimension
   Ψprev, Ψbonds, physinds = genΨgauss(sitenum=N, bonddim=χ, physdim=d, withaux=withaux)
   norm2₀ = norm2(Ψprev, Ψbonds)
@@ -247,10 +301,12 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqt
     ratioₖₖ₊₁s[k] = sqrt(norm2ₖ)
     println("k=$k, norm2_k = $norm2ₖ")
     Ψ[k&1+1] /= norm2ₖ^inv(2N)
-    uₖs[k] = expectedval(Ψ[k&1+1], Ψbonds, physinds, hdens, diag=true, Ψ2=Ψ[k&1+1])
-    # for canonical sum
-    uₖₖ₊₁s[k] = expectedval(Ψ[k&1+1], Ψbonds, physinds, hdens, diag=false, Ψ2=Ψ[2-k&1])
-    innerₖₖ₊₁s[k] = norm2(Ψ[k&1+1], Ψbonds, diag=false, Ψ2=Ψ[2-k&1])
+    task1 = Threads.@spawn expectedval(Ψ[k&1+1], Ψbonds, physinds, hdens, diag=true, Ψ2=Ψ[k&1+1])
+    task2 = Threads.@spawn expectedval(Ψ[k&1+1], Ψbonds, physinds, hdens, diag=false, Ψ2=Ψ[2-k&1])
+    task3 = Threads.@spawn norm2(Ψ[k&1+1], Ψbonds, diag=false, Ψ2=Ψ[2-k&1])
+    uₖs[k] = fetch(task1)
+    uₖₖ₊₁s[k] = fetch(task2)
+    innerₖₖ₊₁s[k] = fetch(task3)
     println("uk = ", uₖs[k])
   end
   println("==== end ====")
@@ -275,7 +331,7 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqt
 
   plot!(cansumplot, kBT, uβs, xlabel="kBT", ylabel="E/N", label="l=$l,(No.$counter)", legend = :outerleft)
 
-  open("uβ-l=$l,χ=$χ,N=$N,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux"),No$counter.txt", "w") do fp
+  open("uβ-l=$l,χ=$χ,N=$N,kmax=$kmax,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux"),No$counter.txt", "w") do fp
     content = ""
     for (t, uk) in zip(kBT, uβs)
       content *= "$t $uk\n"
@@ -284,6 +340,7 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqt
   end
 
   println("\n\n==== time record ====")
+  return kBT, uβs
 end
 
 function writeΨ(Ψ, filename)
@@ -302,7 +359,7 @@ end
 
 function innerents(_Ψ, _Ψbonds)
   N = length(_Ψ)
-  
+
   Ψ = deepcopy(_Ψ)
   Ψbonds = deepcopy(_Ψbonds)
   pχbonds = deepcopy(Ψbonds)
@@ -391,9 +448,9 @@ function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], 
       if measinnerents
         innerentsfortemp["$k"] = innerents(Ψcouple[k&1+1], Ψbonds)
       end
-      writeΨ(Ψcouple[k&1+1], "Ψ-l=$l,k=$k,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux").txt")
+      writeΨ(Ψcouple[k&1+1], "Ψ-l=$l,k=$k,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux")$(rev ? ",rev" : "").txt")
     else
-      cooldown(Ψcouple[k&1+1], Ψcouple[2-k&1], Ψbonds, Dχbonds, physinds, l_h)
+      cooldown(Ψcouple[k&1+1], Ψcouple[2-k&1], Ψbonds, Dχbonds, physinds, l_h, rev=rev)
     end
     Ψnorm2 = norm2(Ψcouple[k&1+1], Ψbonds)
     println("k=$k, Ψnorm2 = $Ψnorm2")
@@ -402,7 +459,7 @@ function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], 
   end
   println("==== end ====")
 
-  open("entropies-l=$l,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux").txt", "w") do fp
+  open("entropies-l=$l,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux")$(rev ? ",rev" : "").txt", "w") do fp
     content = ""
     for item in entsfortemp
       content *= item.first * "\n"
@@ -417,10 +474,10 @@ function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], 
   for item in sort(entsfortemp |> collect)
     plot!([0:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)", legend = :outerleft)
   end
-  savefig("entropies-l=$l,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux").png")
+  savefig("entropies-l=$l,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux")$(rev ? ",rev" : "").png")
 
   if measinnerents
-    open("innerents-l=$l,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux").txt", "w") do fp
+    open("innerents-l=$l,N=$N,χ=$χ,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux")$(rev ? ",rev" : "").txt", "w") do fp
       content = ""
       for item in innerentsfortemp
         content *= item.first * "\n"
@@ -441,28 +498,41 @@ function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], 
   println("\n\n==== time record ====")
 end
 
-function plotuβs_samel()
+function plotuβs_samel(;l, kmax, χ, N, repnum, withaux, seqtrunc)
   cansumplot = plot()
-  withaux = true
-  seqtrunc = true
-  l = 5
-  kmax = 400
-  χ = 20
-  N = 16
-  for i in 1:3
-    @time plotuβ(N=N, χ=χ, l=l, kmax=200, counter=i, withaux=withaux, cansumplot=cansumplot, seqtrunc=seqtrunc)
+  uβss = Vector{Vector{Float64}}(undef, repnum)
+  kBT = []
+  for i in 1:repnum
+    @time kBT, uβss[i] = plotuβ(N=N, χ=χ, l=l, kmax=kmax, counter=i, withaux=withaux, cansumplot=cansumplot, seqtrunc=seqtrunc)
   end
   plot(cansumplot)
-  savefig("uβ-l=$l,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc.png")
+  savefig("uβ-l=$l,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc,repnum=$repnum.png")
+  ave = zeros(Float64, length(uβss[1]))
+  var = zeros(Float64, length(uβss[1]))
+  for i in 1:repnum
+    for j in 1:length(uβss[1])
+      ave[j] += uβss[i][j]
+    end
+  end
+  ave /= repnum
+  for i in 1:repnum
+    for j in 1:length(uβss[1])
+      var[j] += (ave[j] - uβss[i][j]) ^ 2
+    end
+  end
+  var /= repnum - 1 # unbiased variance
+  se = sqrt.(var) ./ sqrt(repnum) # standard error
+  plot(kBT, ave, xlabel="kBT", ylabel="E/N average", yerror=se, legend=false)
+  savefig("ave_uβ-l=$l,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc,repnum=$repnum.png")
 end
 
 function plotuβs_forl()
   cansumplot = plot()
-  kmax = 500
+  kmax = 200
   seqtrunc = true
   withaux = true
   N = 16
-  χ = 40
+  χ = 20
   for l in [2,8,32]
     plotuβ(N=N, χ=χ, l=l, kmax=kmax, withaux=withaux, cansumplot=cansumplot, seqtrunc=seqtrunc)
   end
@@ -470,5 +540,23 @@ function plotuβs_forl()
   savefig("uβ-forl,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc.png")
 end
 
-@time plotents(l=5, N=64, χ=40, withaux=true, meastemps=[0:100:200;], measinnerents=true)
-# @time plotuβs_forl()
+# function sptest()
+#   N = 16
+#   l = 5
+#   Ψprev, Ψbonds, physinds = genΨgauss(sitenum=N, bonddim=40, physdim=2, withaux=true)
+#   norm2₀ = norm2(Ψprev, Ψbonds)
+#   Ψprev /= norm2₀^inv(2N)
+#   hdens, l_h = hdens_TIsing(N, physinds, l)
+#   expectedval_(Ψprev, Ψbonds, physinds, hdens)
+#   expectedval(Ψprev, Ψbonds, physinds, hdens)
+#   @time a = expectedval_(Ψprev, Ψbonds, physinds, hdens)
+#   @time b = expectedval(Ψprev, Ψbonds, physinds, hdens)
+#   println("a = $a")
+#   println("b = $b")
+# end
+
+# @time plotents(l=5, N=64, χ=40, seqtrunc=true, withaux=true, meastemps=[0:200:1600;], measinnerents=true, rev=false)
+@time plotuβs_samel(l=5, kmax=500, χ=40, N=16, repnum=5, withaux=true, seqtrunc=true)
+# sptest()
+
+

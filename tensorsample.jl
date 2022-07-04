@@ -1,6 +1,7 @@
 using ITensors
 using LinearAlgebra
 using Plots
+using Base.Threads
 
 function sample01()
   i = Index(2)
@@ -206,7 +207,7 @@ function entanglemententropytest()
 end
 
 # λ : array of singular values(not necessarily normalized)
-function entropy(λ)
+function sings2ent(λ)
   nrm = λ.^2 |> sum |> sqrt
   return -sum(λ ./ nrm .|> x -> 2x^2*log(x))
 end
@@ -225,15 +226,15 @@ function Ψentropies(_Ψ, Ψbonds)
   end
   U, S, V = svd(Ψ[end], Ψbonds[end])
   Ψ[end] = V * replaceind(S, commonind(S, U) => Ψbonds[end])
-  entropies[end] = entropy(storage(S))
+  entropies[end] = sings2ent(storage(S))
   for site in N-1:-1:1
     U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site+1], Ψ[site]))
     Ψ[site+1] = δ(Ψbonds[site+1], commonind(S, U)) * U # truncate
     Ψ[site] = V * S * δ(Ψbonds[site+1], commonind(S, U))
-    entropies[site+1] = entropy(storage(S))
+    entropies[site+1] = sings2ent(storage(S))
   end
   _, S, _ = svd(Ψ[1], Ψbonds[1])
-  entropies[1] = entropy(storage(S))
+  entropies[1] = sings2ent(storage(S))
 
   return entropies
 end
@@ -355,7 +356,7 @@ function Ψcenterentropies(_Ψ, _Ψbonds, _physinds)
     Ψ[site+1] = U
     Ψ[site] = V * S
     if site & 1 == 0
-      entropies[(N-site)÷2+1] = entropy(storage(S))
+      entropies[(N-site)÷2+1] = sings2ent(storage(S))
     end
   end
   println("center entropies complete.")
@@ -429,7 +430,7 @@ function entropytest2()
     _, S, _ = svd(bulk, (physinds[(N-n)÷2+1:(N+n)÷2]...))
     # display(storage(S))
     println("\n")
-    exactcenterentropies[n÷2] = entropy(storage(S))
+    exactcenterentropies[n÷2] = sings2ent(storage(S))
   end
   println("yy")
   @time cancenterentropies = Ψcenterentropies(Ψ, Ψbonds, physinds)
@@ -447,7 +448,7 @@ function entropytest2()
   display(cantrunccenterents)
 end
 
-function writeΨ(Ψ, filename)
+function _writeΨ(Ψ, filename)
   open(filename, "w") do fp
     content = ""
     for p in Ψ
@@ -469,7 +470,7 @@ function readwritetensor()
   C = randomITensor(i[3], a[3], i[4])
   Ψ = [A, B, C]
 
-  writeΨ(Ψ, "readwritetensorsample.txt")
+  _writeΨ(Ψ, "readwritetensorsample.txt")
 
   Ψ2 = []
   current = Vector{Float64}()
@@ -512,6 +513,54 @@ function norm2(Ψ, Ψbonds; diag=true, Ψ2=Ψ)
   return ret[]
 end
 
+function Ψentropies2(_Ψ, Ψbonds)
+  Ψ = deepcopy(_Ψ)
+  N = length(Ψ)
+  lefttask = Threads.@spawn for site in 1:N÷2-1
+    Q, R = qr(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site], Ψ[site+1]))
+    Ψ[site] = Q
+    Ψ[site+1] = R
+  end
+  righttask = Threads.@spawn for site in 1:N÷2-1
+    Q, R = qr(Ψ[N+1-site] * Ψ[N-site], uniqueinds(Ψ[N+1-site], Ψ[N-site]))
+    Ψ[N+1-site] = Q
+    Ψ[N-site] = R
+  end
+  fetch(lefttask)
+  fetch(righttask)
+
+  Ucent, Scent, Vcent = svd(Ψ[N÷2] * Ψ[N÷2+1], uniqueinds(Ψ[N÷2], Ψ[N÷2+1]))
+
+  ret = zeros(Float64, N + 1)
+  ret[N÷2+1] = sings2ent(Scent |> storage)
+
+  lefttask = Threads.@spawn begin
+    Ψ[N÷2] = Ucent * Scent
+    for site in N÷2-1:-1:1
+      U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site+1], Ψ[site]))
+      Ψ[site] = S * V
+      Ψ[site+1] = U
+      ret[site+1] = sings2ent(S |> storage)
+    end
+    _, S, _ = svd(Ψ[1], Ψbonds[1])
+    ret[1] = sings2ent(S |> storage)
+  end
+  righttask = Threads.@spawn begin
+    Ψ[1+N÷2] = Scent * Vcent
+    for site in 1+N÷2:N-1
+      U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site], Ψ[site+1]))
+      Ψ[site] = U
+      Ψ[site+1] = S * V
+      ret[site+1] = sings2ent(S |> storage)
+    end
+    _, S, _ = svd(Ψ[end], Ψbonds[end])
+    ret[end] = sings2ent(S |> storage)
+  end
+  fetch(lefttask)
+  fetch(righttask)
+  return ret
+end
+
 function cantest()
   N = 8
   χ = 20
@@ -542,7 +591,7 @@ function cantest()
   sqrtScent = ITensor(sqrt.(Scent |> matrix), inds(Scent))
 
   entstry = zeros(Float64, N - 1)
-  entstry[N÷2] = entropy(Scent |> storage)
+  entstry[N÷2] = sings2ent(Scent |> storage)
   Ψhalv = deepcopy(Ψ2)
   Ψhalv[N÷2] = Ucent * sqrtScent
   Ψhalvbonds = similar(Ψ2bonds)
@@ -554,7 +603,7 @@ function cantest()
     U, S, V = svd(Ψhalv[site] * Ψhalv[site+1], uniqueinds(Ψhalv[site+1], Ψhalv[site]))
     Ψhalv[site] = S * V
     Ψhalv[site+1] = U
-    entstry[site] = entropy(S |> storage)
+    entstry[site] = sings2ent(S |> storage)
     Ψhalvbonds[site+1] = commonind(U, S)
   end
 
@@ -564,7 +613,7 @@ function cantest()
     U, S, V = svd(Ψhalv[site] * Ψhalv[site+1], uniqueinds(Ψhalv[site], Ψhalv[site+1]))
     Ψhalv[site] = U
     Ψhalv[site+1] = S * V
-    entstry[site] = entropy(S |> storage)
+    entstry[site] = sings2ent(S |> storage)
     Ψhalvbonds[site+1] = commonind(U, S)
   end
 
@@ -582,6 +631,26 @@ function cantest()
   display(entΨhalv)
 end
 
+function cantest2()
+  N = 64
+  χ = 40
+  Ψ, Ψbonds, physinds = genΨnocanonical(sitenum=N, physdim=2, bonddim=χ, withaux=true)
+  Ψ /= norm2(Ψ, Ψbonds)^inv(2N)
+
+  uo = Ψentropies(Ψ, Ψbonds)
+  gue = Ψentropies2(Ψ, Ψbonds)
+
+  @time Ψentropies(Ψ, Ψbonds)
+  @time Ψentropies2(Ψ, Ψbonds)
+
+  plot([0:N;], gue, xlabel="bond", ylabel="entropy", label="Ψent2", legend = :outerleft)
+  plot!([0:N;], uo, xlabel="bond", ylabel="entropy", label="Ψent", legend = :outerleft)
+  savefig("entropytest2.png")
+end
+
+# function writeΨ()
+
+# end
 
 # entropytest2()
-cantest()
+cantest2()

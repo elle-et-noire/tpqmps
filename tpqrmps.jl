@@ -29,12 +29,14 @@ function genΨcan(;sitenum, physdim, bonddim, withaux=true, rightunitary=false)
   return Ψ, Ψbonds, physinds
 end
 
-function genΨgauss(;sitenum, physdim, bonddim, withaux=true)
+function genΨgauss(;sitenum, physdim, bonddim, withaux=true, edgedim=bonddim)
   rng = MersenneTwister()
   Ψbonds = siteinds(bonddim, sitenum + 1)
   physinds = siteinds(physdim, sitenum)
+  Ψbonds[1] = Index(edgedim)
+  Ψbonds[end] = Index(edgedim)
 
-  Ψ = [ITensor(randn(rng, ComplexF64, (physdim, bonddim, bonddim)),
+  Ψ = [ITensor(randn(rng, ComplexF64, (physdim, dim(Ψbonds[site]), dim(Ψbonds[site+1]))),
         physinds[site], Ψbonds[site], Ψbonds[site+1]) for site in 1:sitenum]
   if !withaux
     Ψbonds[1], Ψbonds[end] = Index(1), Index(1)
@@ -75,6 +77,10 @@ function hdens_TIsing(sitenum, physinds, l)
   l_h = deepcopy(hdens)
   l_h[end] = l_h_right
   return (hdens, l_h)
+end
+
+function mpoid(sitenum, physinds, l)
+  return [ITensor(I(dim(physinds[i])), physinds[i], physinds[i]') for i in 1:sitenum]
 end
 
 "λ : array of singular values(not necessarily normalized)"
@@ -130,7 +136,7 @@ function cooldown_seqtrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; meas
   #======== right-canonical ========#
   U, S, V = svd(Ψcur[end|>atΨ], (Ψbonds[end|>atbond]))
   # ignore U @ |aux> since nothing operate here and contraction is same as unit matrix.
-  Ψcur[end|>atΨ] = V * replaceind(S, commonind(S, U) => Ψbonds[end|>atbond])
+  Ψcur[end|>atΨ] = V * S * δ(commonind(S, U), Ψbonds[end|>atbond])
   if measents
     entropies[end|>atbond] = sings2ent(storage(S))
   end
@@ -164,7 +170,7 @@ function cooldown_unitrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; meas
   #======== right-canonical ========#
   U, S, V = svd(Ψcur[end], (Dχbonds[end]))
   # ignore V @ |aux> since nothing operate here and contraction is same as unit matrix.
-  Ψcur[end] = V * replaceind(S, commonind(S, U) => Dχbonds[end])
+  Ψcur[end] = V * S * δ(commonind(S, U), Dχbonds[end])
   if measents
     entropies[end] = sings2ent(S * δ(commonind(U, S), Ψbonds[end]) |> storage)
   end
@@ -187,21 +193,6 @@ function cooldown_unitrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; meas
     Ψcur[bond] *= δ(Dχbonds[bond], Ψbonds[bond])
   end
 end
-
-# function norm2_(Ψ, Ψbonds; diag=true, Ψ2=Ψ)
-#   N = length(Ψ)
-#   ret = prime(Ψ[1], Ψbonds[2]) * conj(Ψ2[1])
-#   for site in 2:N-1
-#     ret *= prime(Ψ[site], Ψbonds[site], Ψbonds[site+1])
-#     ret *= conj(Ψ2[site])
-#   end
-#   ret *= prime(Ψ[end], Ψbonds[end-1])
-#   ret *= conj(Ψ2[end])
-#   if diag
-#     return real(ret[])
-#   end
-#   return ret[]
-# end
 
 function norm2(Ψ, Ψbonds; diag=true, Ψ2=Ψ)
   N = length(Ψ)
@@ -256,30 +247,13 @@ function expectedval(Ψ, Ψbonds, physinds, mpo; diag=true, Ψ2=Ψ)
   return ret[]
 end
 
-# function expectedval_(Ψ, Ψbonds, physinds, mpo; diag=true, Ψ2=Ψ)
-#   N = length(Ψ)
-#   # Ψ and Ψ2 share Ψbonds
-#   val = prime(Ψ[1], Ψbonds[2], physinds[1]) * mpo[1] * conj(Ψ2[1])
-#   for site in 2:N-1
-#     val *= prime(Ψ[site])
-#     val *= conj(Ψ2[site])
-#     val *= mpo[site]
-#   end
-#   val *= prime(Ψ[end], Ψbonds[end-1], physinds[end])
-#   val *= conj(Ψ2[end])
-#   val *= mpo[end]
-#   if diag
-#     return real(val[])
-#   end
-#   return val[]
-# end
-
-function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqtrunc=true)
+function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqtrunc=true, edgedim=χ)
   d = 2 # physical dimension
-  Ψprev, Ψbonds, physinds = genΨgauss(sitenum=N, bonddim=χ, physdim=d, withaux=withaux)
+  Ψprev, Ψbonds, physinds = genΨgauss(sitenum=N, bonddim=χ, physdim=d, withaux=withaux, edgedim=edgedim)
   norm2₀ = norm2(Ψprev, Ψbonds)
   Ψprev /= norm2₀^inv(2N)
   hdens, l_h = hdens_TIsing(N, physinds, l)
+  # hdens = mpoid(N, physinds, l)
 
   Ψ = [Ψprev, Vector{ITensor}(undef, N)]
   Dχbonds = Vector{Index}(undef, N + 1)
@@ -311,25 +285,89 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqt
   end
   println("==== end ====")
 
+  scatter([N * (l - uₖs[k]) / 2k for k in 1:kmax], uₖs, xlabel="kBT", ylabel="E/N", legend=false)
+  savefig("mcan-uβ-l=$l,χ=$χ,N=$N,kmax=$kmax,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux"),No$counter.png")
+  plot()
+
+  open("ratio.txt", "w") do fp
+    content = ""
+    for r in ratioₖₖ₊₁s
+      content *= "$r\n"
+    end
+    write(fp, content)
+  end
+
+  open("u_kk.txt", "w") do fp
+    content = ""
+    for r in uₖs
+      content *= "$r\n"
+    end
+    write(fp, content)
+  end
+
+  open("u_kk+1.txt", "w") do fp
+    content = ""
+    for r in uₖₖ₊₁s
+      content *= "$r\n"
+    end
+    write(fp, content)
+  end
+
+  open("inner_kk+1.txt", "w") do fp
+    content = ""
+    for r in innerₖₖ₊₁s
+      content *= "$r\n"
+    end
+    write(fp, content)
+  end
+
+  open("u0.txt", "w") do fp
+    write(fp, "$u₀")
+  end
+
   kBT = [0.1:0.1:4;]
   βs = 1 ./ kBT
   uβs = Vector{Float64}(undef, length(kBT))
+  # uβs_ex = Vector{Float64}(undef, length(kBT))
   for (i, β) in enumerate(βs)
     expval = u₀
-    nrm2 = one(ComplexF64)
-    coef = one(ComplexF64)
+    nrm2 = one(BigFloat)
+    coef = one(BigFloat)
+
+    # expval_ex = u₀
+    # coef_ex = one(BigFloat)
+    # coef_kk = one(BigFloat)
+    nrm2s = []
+    expvals = []
     for k in 0:kmax-1
       coef *= (N * β) / (2k + 1) * ratioₖₖ₊₁s[k+1]
       expval += coef * uₖₖ₊₁s[k+1]
       nrm2 += coef * innerₖₖ₊₁s[k+1]
+      push!(expvals, coef * uₖₖ₊₁s[k+1] * 2^(-β * N * l))
+      push!(nrm2s, coef * innerₖₖ₊₁s[k+1] * 2^(-β * N * l))
+      # coef_ex *= (N * β) / (2k + 1)
+      # coef_kk *= ratioₖₖ₊₁s[k+1]
+      # expval_ex = coef_ex * (-coef_kk * ratioₖₖ₊₁s[k+1] + l * coef_kk * innerₖₖ₊₁s[k+1])
+
       coef *= (N * β) / (2k + 2) * ratioₖₖ₊₁s[k+1]
       expval += coef * uₖs[k + 1]
       nrm2 += coef
+      push!(expvals, coef * uₖs[k + 1] * 2^(-β * N * l))
+      push!(nrm2s, coef * 2^(-β * N * l))
+      # coef_ex *= (N * β) / (2k + 2)
+      # coef_kk *= ratioₖₖ₊₁s[k+1]
+      # expval_ex = coef_ex * (-coef_kk * ratioₖₖ₊₁s[k+2] + l * coef_kk)
     end
-    uβs[i] = real(expval) / real(nrm2)
+    if nrm2 == 0
+      println("nrm2 == 0")
+    end
+    # uβs[i] = real(expval) / real(nrm2)
+    uβs[i] = (expvals |> real |> sort |> sum) / (nrm2s |> real |> sort |> sum)
+    # uβs_ex[i] = real(expval_ex) / real(nrm2)
   end
 
   plot!(cansumplot, kBT, uβs, xlabel="kBT", ylabel="E/N", label="l=$l,(No.$counter)", legend = :outerleft)
+  # plot!(cansumplot, kBT, uβs_ex, xlabel="kBT", ylabel="E/N", label="l=$l,(No.$counter)-ex", legend = :outerleft)
 
   open("uβ-l=$l,χ=$χ,N=$N,kmax=$kmax,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux"),No$counter.txt", "w") do fp
     content = ""
@@ -498,15 +536,15 @@ function plotents(;l, N, χ, withaux, seqtrunc=true, meastemps=[200:200:1600;], 
   println("\n\n==== time record ====")
 end
 
-function plotuβs_samel(;l, kmax, χ, N, repnum, withaux, seqtrunc)
+function plotuβs_samel(;l, kmax, χ, N, repnum, withaux, seqtrunc, edgedim)
   cansumplot = plot()
   uβss = Vector{Vector{Float64}}(undef, repnum)
   kBT = []
   for i in 1:repnum
-    @time kBT, uβss[i] = plotuβ(N=N, χ=χ, l=l, kmax=kmax, counter=i, withaux=withaux, cansumplot=cansumplot, seqtrunc=seqtrunc)
+    @time kBT, uβss[i] = plotuβ(N=N, χ=χ, l=l, kmax=kmax, counter=i, withaux=withaux, cansumplot=cansumplot, seqtrunc=seqtrunc, edgedim=edgedim)
   end
   plot(cansumplot)
-  savefig("uβ-l=$l,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc,repnum=$repnum.png")
+  savefig("uβ-l=$l,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc,repnum=$repnum,edgedim=$edgedim.png")
   ave = zeros(Float64, length(uβss[1]))
   var = zeros(Float64, length(uβss[1]))
   for i in 1:repnum
@@ -523,7 +561,7 @@ function plotuβs_samel(;l, kmax, χ, N, repnum, withaux, seqtrunc)
   var /= repnum - 1 # unbiased variance
   se = sqrt.(var) ./ sqrt(repnum) # standard error
   plot(kBT, ave, xlabel="kBT", ylabel="E/N average", yerror=se, legend=false)
-  savefig("ave_uβ-l=$l,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc,repnum=$repnum.png")
+  savefig("ave_uβ-l=$l,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc,repnum=$repnum,edgedim=$edgedim.png")
 end
 
 function plotuβs_forl()
@@ -540,23 +578,8 @@ function plotuβs_forl()
   savefig("uβ-forl,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc.png")
 end
 
-# function sptest()
-#   N = 16
-#   l = 5
-#   Ψprev, Ψbonds, physinds = genΨgauss(sitenum=N, bonddim=40, physdim=2, withaux=true)
-#   norm2₀ = norm2(Ψprev, Ψbonds)
-#   Ψprev /= norm2₀^inv(2N)
-#   hdens, l_h = hdens_TIsing(N, physinds, l)
-#   expectedval_(Ψprev, Ψbonds, physinds, hdens)
-#   expectedval(Ψprev, Ψbonds, physinds, hdens)
-#   @time a = expectedval_(Ψprev, Ψbonds, physinds, hdens)
-#   @time b = expectedval(Ψprev, Ψbonds, physinds, hdens)
-#   println("a = $a")
-#   println("b = $b")
-# end
-
 # @time plotents(l=5, N=64, χ=40, seqtrunc=true, withaux=true, meastemps=[0:200:1600;], measinnerents=true, rev=false)
-@time plotuβs_samel(l=5, kmax=500, χ=40, N=16, repnum=5, withaux=true, seqtrunc=true)
+@time plotuβs_samel(l=5, kmax=600, χ=10, N=16, repnum=1, withaux=true, seqtrunc=true, edgedim=10)
 # sptest()
 
 

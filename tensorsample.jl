@@ -538,8 +538,8 @@ function Ψentropies2(_Ψ, Ψbonds)
     Ψ[N÷2] = Ucent * Scent
     for site in N÷2-1:-1:1
       U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site+1], Ψ[site]))
-      Ψ[site] = S * V
-      Ψ[site+1] = U
+      Ψ[site] = S * V * δ(Ψbonds[site+1], commonind(S, U))
+      Ψ[site+1] = U * δ(Ψbonds[site+1], commonind(S, U))
       ret[site+1] = sings2ent(S |> storage)
     end
     _, S, _ = svd(Ψ[1], Ψbonds[1])
@@ -549,8 +549,8 @@ function Ψentropies2(_Ψ, Ψbonds)
     Ψ[1+N÷2] = Scent * Vcent
     for site in 1+N÷2:N-1
       U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site], Ψ[site+1]))
-      Ψ[site] = U
-      Ψ[site+1] = S * V
+      Ψ[site] = U * δ(Ψbonds[site+1], commonind(S, U))
+      Ψ[site+1] = S * V * δ(Ψbonds[site+1], commonind(S, U))
       ret[site+1] = sings2ent(S |> storage)
     end
     _, S, _ = svd(Ψ[end], Ψbonds[end])

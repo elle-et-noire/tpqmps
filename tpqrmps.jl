@@ -7,7 +7,7 @@ using Base.Threads
 @show nthreads()
 
 function unitary3ord(physind; leftbond, rightbond, rightunitary=false)
-  χ = maximum(dim(leftbond), dim(rightbond))
+  χ = maximum([dim(leftbond), dim(rightbond)])
   d = dim(physind)
   q, _ = randn(MersenneTwister(), ComplexF64, (χ * d, χ * d)) |> qr
   u = reshape(q, (d, χ, d, χ))
@@ -17,7 +17,7 @@ function unitary3ord(physind; leftbond, rightbond, rightunitary=false)
   return ITensor(u[1, 1:dim(leftbond), :, 1:dim(rightbond)], leftbond, physind, rightbond) # rightunitary
 end
 
-function genΨcan(;sitenum, physdim, bonddim, withaux=true, rightunitary=false)
+function genΨcan(;sitenum, physdim, bonddim, withaux=true, rightunitary=false, edgedim=bonddim)
   Ψbonds = siteinds(bonddim, sitenum + 1)
   physinds = siteinds(physdim, sitenum)
   Ψ = [unitary3ord(physinds[i], leftbond=Ψbonds[i], rightbond=Ψbonds[i + 1], rightunitary=rightunitary) for i in 1:sitenum]
@@ -249,7 +249,7 @@ end
 
 function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqtrunc=true, edgedim=χ)
   d = 2 # physical dimension
-  Ψprev, Ψbonds, physinds = genΨgauss(sitenum=N, bonddim=χ, physdim=d, withaux=withaux, edgedim=edgedim)
+  Ψprev, Ψbonds, physinds = genΨcan(sitenum=N, bonddim=χ, physdim=d, withaux=withaux, edgedim=edgedim)
   norm2₀ = norm2(Ψprev, Ψbonds)
   Ψprev /= norm2₀^inv(2N)
   hdens, l_h = hdens_TIsing(N, physinds, l)
@@ -289,41 +289,41 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqt
   savefig("mcan-uβ-l=$l,χ=$χ,N=$N,kmax=$kmax,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux"),No$counter.png")
   plot()
 
-  open("ratio.txt", "w") do fp
-    content = ""
-    for r in ratioₖₖ₊₁s
-      content *= "$r\n"
-    end
-    write(fp, content)
-  end
+  # open("ratio.txt", "w") do fp
+  #   content = ""
+  #   for r in ratioₖₖ₊₁s
+  #     content *= "$r\n"
+  #   end
+  #   write(fp, content)
+  # end
 
-  open("u_kk.txt", "w") do fp
-    content = ""
-    for r in uₖs
-      content *= "$r\n"
-    end
-    write(fp, content)
-  end
+  # open("u_kk.txt", "w") do fp
+  #   content = ""
+  #   for r in uₖs
+  #     content *= "$r\n"
+  #   end
+  #   write(fp, content)
+  # end
 
-  open("u_kk+1.txt", "w") do fp
-    content = ""
-    for r in uₖₖ₊₁s
-      content *= "$r\n"
-    end
-    write(fp, content)
-  end
+  # open("u_kk+1.txt", "w") do fp
+  #   content = ""
+  #   for r in uₖₖ₊₁s
+  #     content *= "$r\n"
+  #   end
+  #   write(fp, content)
+  # end
 
-  open("inner_kk+1.txt", "w") do fp
-    content = ""
-    for r in innerₖₖ₊₁s
-      content *= "$r\n"
-    end
-    write(fp, content)
-  end
+  # open("inner_kk+1.txt", "w") do fp
+  #   content = ""
+  #   for r in innerₖₖ₊₁s
+  #     content *= "$r\n"
+  #   end
+  #   write(fp, content)
+  # end
 
-  open("u0.txt", "w") do fp
-    write(fp, "$u₀")
-  end
+  # open("u0.txt", "w") do fp
+  #   write(fp, "$u₀")
+  # end
 
   kBT = [0.1:0.1:4;]
   βs = 1 ./ kBT
@@ -579,7 +579,7 @@ function plotuβs_forl()
 end
 
 # @time plotents(l=5, N=64, χ=40, seqtrunc=true, withaux=true, meastemps=[0:200:1600;], measinnerents=true, rev=false)
-@time plotuβs_samel(l=5, kmax=600, χ=10, N=16, repnum=1, withaux=true, seqtrunc=true, edgedim=10)
+@time plotuβs_samel(l=5, kmax=500, χ=12, N=16, repnum=10, withaux=true, seqtrunc=true, edgedim=12)
 # sptest()
 
 

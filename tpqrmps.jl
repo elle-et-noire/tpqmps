@@ -47,8 +47,8 @@ function genΨgauss(;sitenum, physdim, bonddim, withaux=true, edgedim=bonddim)
 end
 
 "make hamiltonian density and l - h of transverse ising model."
-function hdens_TIsing(sitenum, physinds, l)
-  J = 1; g = 1
+function hdens_TIsing(sitenum, physinds, l; J=1, g=1)
+  # J = 1; g = 1
   d = dim(physinds[1])
 
   hbonds = [Index(3, "hbond,$i") for i in 1:sitenum-1]
@@ -131,13 +131,14 @@ function cooldown_seqtrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; meas
     Dχbonds[site+1|>atbond] = commonind(Q, R)
     Ψcur[site|>atΨ] = Q
     Ψcur[site+1|>atΨ] = R
+    # Ψbonds[site+1|>atbond] = commonind(Q, R)
   end
 
   #======== right-canonical ========#
   U, S, V = svd(Ψcur[end|>atΨ], (Ψbonds[end|>atbond]))
   # ignore U @ |aux> since nothing operate here and contraction is same as unit matrix.
-  Ψcur[end|>atΨ] = V * S * δ(commonind(S, U), Ψbonds[end|>atbond])
   if measents
+    Ψcur[end|>atΨ] = V * S * δ(commonind(S, U), Ψbonds[end|>atbond])
     entropies[end|>atbond] = sings2ent(storage(S))
   end
 
@@ -145,6 +146,7 @@ function cooldown_seqtrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; meas
     U, S, V = svd(Ψcur[site|>atΨ] * Ψcur[site+1|>atΨ], (Ψbonds[site+2|>atbond], physinds[site+1|>atpind]))
     Ψcur[site+1|>atΨ] = δ(Ψbonds[site+1|>atbond], commonind(S, U)) * U # truncate
     Ψcur[site|>atΨ] = V * S * δ(Ψbonds[site+1|>atbond], commonind(S, U))
+
     if measents
       entropies[site+1|>atbond] = sings2ent(storage(S))
     end
@@ -196,27 +198,29 @@ end
 
 function norm2(Ψ, Ψbonds; diag=true, Ψ2=Ψ)
   N = length(Ψ)
-  leftcont = Threads.@spawn begin
+  # leftcont = Threads.@spawn begin
     left = prime(Ψ[1], Ψbonds[2]) * conj(Ψ2[1])
-    for site in 2:N÷2
+    for site in 2:N-1
       left *= prime(Ψ[site], Ψbonds[site], Ψbonds[site+1])
       left *= conj(Ψ2[site])
     end
     left
-  end
-  rightcont = Threads.@spawn begin
-    right = prime(Ψ[reverseind(Ψ, 1)], Ψbonds[reverseind(Ψbonds, 2)]) * conj(Ψ2[reverseind(Ψ2, 1)])
-    for site in 2:N÷2
-      right *= prime(Ψ[reverseind(Ψ, site)], Ψbonds[reverseind(Ψbonds, site)], Ψbonds[reverseind(Ψbonds, site+1)])
-      right *= conj(Ψ2[reverseind(Ψ2, site)])
-    end
-    right
-  end
-  ret = fetch(leftcont) * fetch(rightcont)
-  if diag
-    return real(ret[])
-  end
-  return ret[]
+  # end
+  left *= prime(Ψ[end], Ψbonds[end-1])
+  left *= conj(Ψ2[end])
+  # rightcont = Threads.@spawn begin
+  #   right = prime(Ψ[reverseind(Ψ, 1)], Ψbonds[reverseind(Ψbonds, 2)]) * conj(Ψ2[reverseind(Ψ2, 1)])
+  #   for site in 2:N÷2
+  #     right *= prime(Ψ[reverseind(Ψ, site)], Ψbonds[reverseind(Ψbonds, site)], Ψbonds[reverseind(Ψbonds, site+1)])
+  #     right *= conj(Ψ2[reverseind(Ψ2, site)])
+  #   end
+  #   right
+  # end
+  # ret = fetch(leftcont) * fetch(rightcont)
+  # if diag
+  #   return real(ret[])
+  # end
+  return left[]
 end
 
 function expectedval(Ψ, Ψbonds, physinds, mpo; diag=true, Ψ2=Ψ)
@@ -241,18 +245,18 @@ function expectedval(Ψ, Ψbonds, physinds, mpo; diag=true, Ψ2=Ψ)
     right
   end
   ret = fetch(leftcont) * fetch(rightcont)
-  if diag
-    return real(ret[])
-  end
+  # if diag
+  #   return real(ret[])
+  # end
   return ret[]
 end
 
 function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqtrunc=true, edgedim=χ)
   d = 2 # physical dimension
-  Ψprev, Ψbonds, physinds = genΨcan(sitenum=N, bonddim=χ, physdim=d, withaux=withaux, edgedim=edgedim)
+  Ψprev, Ψbonds, physinds = genΨgauss(sitenum=N, bonddim=χ, physdim=d, withaux=withaux, edgedim=edgedim)
   norm2₀ = norm2(Ψprev, Ψbonds)
   Ψprev /= norm2₀^inv(2N)
-  hdens, l_h = hdens_TIsing(N, physinds, l)
+  hdens, l_h = hdens_TIsing(N, physinds, l, J=1, g=1)
   # hdens = mpoid(N, physinds, l)
 
   Ψ = [Ψprev, Vector{ITensor}(undef, N)]
@@ -260,10 +264,10 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqt
   Dχbonds[1] = Ψbonds[1]
   Dχbonds[end] = Ψbonds[end]
   u₀ = expectedval(Ψprev, Ψbonds, physinds, hdens)
-  uₖs = Vector{Float64}(undef, kmax)
+  uₖs = Vector{ComplexF64}(undef, kmax)
   uₖₖ₊₁s = Vector{ComplexF64}(undef, kmax)
   innerₖₖ₊₁s = Vector{ComplexF64}(undef, kmax)
-  ratioₖₖ₊₁s = Vector{Float64}(undef, kmax)
+  ratioₖₖ₊₁s = Vector{ComplexF64}(undef, kmax)
 
   for k in 1:kmax
     if seqtrunc
@@ -272,20 +276,26 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqt
       cooldown_unitrunc(Ψ[k&1+1], Ψ[2-k&1], Ψbonds, Dχbonds, physinds, l_h)
     end
     norm2ₖ = norm2(Ψ[k&1+1], Ψbonds)
-    ratioₖₖ₊₁s[k] = sqrt(norm2ₖ)
+    ratioₖₖ₊₁s[k] = sqrt(norm2ₖ |> real)
     println("k=$k, norm2_k = $norm2ₖ")
-    Ψ[k&1+1] /= norm2ₖ^inv(2N)
+    # println("k=$k\r")
+    Ψ[k&1+1] /= real(norm2ₖ)^inv(2N)
+    # Ψ[k&1+1][end] /= ratioₖₖ₊₁s[k]
     task1 = Threads.@spawn expectedval(Ψ[k&1+1], Ψbonds, physinds, hdens, diag=true, Ψ2=Ψ[k&1+1])
+    l_hev = expectedval(Ψ[k&1+1], Ψbonds, physinds, l_h, diag=true, Ψ2=Ψ[k&1+1])
     task2 = Threads.@spawn expectedval(Ψ[k&1+1], Ψbonds, physinds, hdens, diag=false, Ψ2=Ψ[2-k&1])
     task3 = Threads.@spawn norm2(Ψ[k&1+1], Ψbonds, diag=false, Ψ2=Ψ[2-k&1])
     uₖs[k] = fetch(task1)
     uₖₖ₊₁s[k] = fetch(task2)
     innerₖₖ₊₁s[k] = fetch(task3)
     println("uk = ", uₖs[k])
+    println("<k|k+1> = $(innerₖₖ₊₁s[k])")
+    println("sqrt(<k+1|k+1>/<k|k>) = $(ratioₖₖ₊₁s[k])")
+    println("<k|l-h|k> = $(l_hev)")
   end
   println("==== end ====")
 
-  scatter([N * (l - uₖs[k]) / 2k for k in 1:kmax], uₖs, xlabel="kBT", ylabel="E/N", legend=false)
+  scatter([N * (l - real(uₖs[k]) / real(ratioₖₖ₊₁s[k])^2) / 2k for k in 1:kmax], real.(uₖs) ./ real.(ratioₖₖ₊₁s).^2, xlabel="kBT", ylabel="E/N", legend=false)
   savefig("mcan-uβ-l=$l,χ=$χ,N=$N,kmax=$kmax,$(seqtrunc ? "seqtrunc" : "unitrunc"),$(withaux ? "withaux" : "noaux"),No$counter.png")
   plot()
 
@@ -337,14 +347,14 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqt
     # expval_ex = u₀
     # coef_ex = one(BigFloat)
     # coef_kk = one(BigFloat)
-    nrm2s = []
-    expvals = []
+    # nrm2s = []
+    # expvals = []
     for k in 0:kmax-1
       coef *= (N * β) / (2k + 1) * ratioₖₖ₊₁s[k+1]
       expval += coef * uₖₖ₊₁s[k+1]
       nrm2 += coef * innerₖₖ₊₁s[k+1]
-      push!(expvals, coef * uₖₖ₊₁s[k+1] * 2^(-β * N * l))
-      push!(nrm2s, coef * innerₖₖ₊₁s[k+1] * 2^(-β * N * l))
+      # push!(expvals, coef * uₖₖ₊₁s[k+1] * 2^(-β * N * l))
+      # push!(nrm2s, coef * innerₖₖ₊₁s[k+1] * 2^(-β * N * l))
       # coef_ex *= (N * β) / (2k + 1)
       # coef_kk *= ratioₖₖ₊₁s[k+1]
       # expval_ex = coef_ex * (-coef_kk * ratioₖₖ₊₁s[k+1] + l * coef_kk * innerₖₖ₊₁s[k+1])
@@ -352,8 +362,8 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqt
       coef *= (N * β) / (2k + 2) * ratioₖₖ₊₁s[k+1]
       expval += coef * uₖs[k + 1]
       nrm2 += coef
-      push!(expvals, coef * uₖs[k + 1] * 2^(-β * N * l))
-      push!(nrm2s, coef * 2^(-β * N * l))
+      # push!(expvals, coef * uₖs[k + 1] * 2^(-β * N * l))
+      # push!(nrm2s, coef * 2^(-β * N * l))
       # coef_ex *= (N * β) / (2k + 2)
       # coef_kk *= ratioₖₖ₊₁s[k+1]
       # expval_ex = coef_ex * (-coef_kk * ratioₖₖ₊₁s[k+2] + l * coef_kk)
@@ -361,8 +371,8 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, withaux, cansumplot, seqt
     if nrm2 == 0
       println("nrm2 == 0")
     end
-    # uβs[i] = real(expval) / real(nrm2)
-    uβs[i] = (expvals |> real |> sort |> sum) / (nrm2s |> real |> sort |> sum)
+    uβs[i] = real(expval / nrm2)
+    # uβs[i] = (expvals |> real |> sort |> sum) / (nrm2s |> real |> sort |> sum)
     # uβs_ex[i] = real(expval_ex) / real(nrm2)
   end
 
@@ -578,8 +588,20 @@ function plotuβs_forl()
   savefig("uβ-forl,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc.png")
 end
 
-# @time plotents(l=5, N=64, χ=40, seqtrunc=true, withaux=true, meastemps=[0:200:1600;], measinnerents=true, rev=false)
-@time plotuβs_samel(l=5, kmax=500, χ=12, N=16, repnum=10, withaux=true, seqtrunc=true, edgedim=12)
+# @time plotents(l=5, N=16, χ=20, seqtrunc=true, withaux=true, meastemps=[0:50:400;], measinnerents=true, rev=false)
+@time plotuβs_samel(l=5, kmax=400, χ=10, N=16, repnum=3, withaux=true, seqtrunc=true, edgedim=10)
 # sptest()
 
+function mpotest()
+  d = 2 # physical dimension
+  N = 6
+  l = 5
+  Ψprev, Ψbonds, physinds = genΨgauss(sitenum=N, bonddim=6, physdim=d, withaux=true)
+  Ψprev /= norm2(Ψprev, Ψbonds)^inv(2N)
+  hdens, l_h = hdens_TIsing(N, physinds, l)
 
+  println(expectedval(Ψprev, Ψbonds, physinds, hdens) - l)
+  println(expectedval(Ψprev, Ψbonds, physinds, l_h))
+end
+
+# mpotest()

@@ -1,4 +1,5 @@
 using ITensors
+using JLD2
 using LinearAlgebra
 using Plots
 using Printf
@@ -7,34 +8,10 @@ using Base.Threads
 import Plots.plot
 import Plots.plot!
 @show nthreads()
-
-"return left or right unitary ITensor."
-function unitary3ord(physind; leftbond, rightbond, rightunitary=false)
-  χ = maximum([dim(leftbond), dim(rightbond)])
-  d = dim(physind)
-  q, _ = randn(MersenneTwister(), ComplexF64, (χ * d, χ * d)) |> qr
-  u = reshape(q, (d, χ, d, χ))
-  if !rightunitary
-    return ITensor(u[:, 1:dim(leftbond), 1, 1:dim(rightbond)], physind, leftbond, rightbond) # leftunitary
-  end
-  return ITensor(u[1, 1:dim(leftbond), :, 1:dim(rightbond)], leftbond, physind, rightbond) # rightunitary
-end
-
-"make Ψ of canonical form."
-function genΨcan(;sitenum, physdim, bonddim, withaux=true, rightunitary=false, edgedim=bonddim)
-  Ψbonds = siteinds(bonddim, sitenum + 1)
-  physinds = siteinds(physdim, sitenum)
-  Ψ = [unitary3ord(physinds[i], leftbond=Ψbonds[i], rightbond=Ψbonds[i + 1], rightunitary=rightunitary) for i in 1:sitenum]
-  if !withaux
-    Ψbonds[1], Ψbonds[end] = Index(1), Index(1)
-    Ψ[1] = unitary3ord(physinds[1], leftbond=Ψbonds[1], rightbond=Ψbonds[2], rightunitary=rightunitary)
-    Ψ[end] = unitary3ord(physinds[1], leftbond=Ψbonds[end-1], rightbond=Ψbonds[2], rightunitary=rightunitary)
-  end
-  return Ψ, Ψbonds, physinds
-end
+pyplot()
 
 "make Ψ with gauss distribution."
-function genΨgauss(;sitenum, physdim, bonddim, edgedim=bonddim)
+function genΨgauss(;sitenum, physdim, bonddim, edgedim=bonddim, seed=-1)
   Ψbonds = siteinds(bonddim, sitenum + 1)
   physinds = siteinds(physdim, sitenum)
   Ψbonds[1], Ψbonds[end] = Index(edgedim), Index(edgedim)
@@ -45,7 +22,6 @@ end
 
 "make hamiltonian density and l - h of transverse ising model."
 function hdens_TIsing(sitenum, physinds, l; J=1, g=1)
-  # J = 1; g = 1
   d = dim(physinds[1])
 
   hbonds = [Index(3, "hbond,$i") for i in 1:sitenum-1]
@@ -55,7 +31,7 @@ function hdens_TIsing(sitenum, physinds, l; J=1, g=1)
   leftmold[:, 2, :] = rightmold[:, 2, :] = sqrt(J / sitenum) * [1 0;0 -1]
   leftmold[:, 3, :] = rightmold[:, 1, :] = -(g / sitenum) * [0 1;1 0]
   h_left = ITensor(leftmold, physinds[1], hbonds[1], physinds[1]')
-  h_right = ITensor(rightmold , physinds[end], hbonds[end], physinds[end]') # coef "N" smashed in rH
+  h_right = ITensor(rightmold, physinds[end], hbonds[end], physinds[end]')
 
   middlemold = zeros(3, d, 3, d)
   middlemold[1, :, 1, :] = I(2)
@@ -97,8 +73,8 @@ function Ψentropies(_Ψ, Ψbonds)
     Ψ[site] = Q
     Ψ[site+1] = R
   end
-  U, S, V = svd(Ψ[end], Ψbonds[end])
-  Ψ[end] = V * replaceind(S, commonind(S, U) => Ψbonds[end])
+  _, S, _ = svd(Ψ[end], Ψbonds[end])
+  # Ψ[end] = V * replaceind(S, commonind(S, U) => Ψbonds[end])
   entropies[end] = sings2ent(storage(S))
   for site in N-1:-1:1
     U, S, V = svd(Ψ[site] * Ψ[site+1], uniqueinds(Ψ[site+1], Ψ[site]))
@@ -129,7 +105,7 @@ function cooldown_seqtrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; entr
 
   #======== right-canonical ========#
   if measents
-    U, S, V = svd(at(Ψcur, N), at(Ψbonds, N + 1))
+    _, S, _ = svd(at(Ψcur, N), at(Ψbonds, N + 1))
     set!(entropies, sings2ent(storage(S)), N + 1)
   end
 
@@ -145,43 +121,6 @@ function cooldown_seqtrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; entr
   if measents
     _, S, _ = svd(at(Ψcur, 1), at(Ψbonds, 1))
     set!(entropies, sings2ent(storage(S)), 1)
-  end
-end
-
-function cooldown_unitrunc(Ψcur, Ψprev, Ψbonds, Dχbonds, physinds, l_h; measents=false, entropies=[], rev=false)
-  N = length(Ψcur)
-  #======== left-canonical ========#
-  Ψcur[1] = Ψprev[1]
-
-  for site in 1:N-1
-    U, S, V = svd((Ψcur[site] * Ψprev[site+1]) * l_h[site+1] |> noprime, (Dχbonds[site], physinds[site]))
-    Dχbonds[site+1] = commonind(U, S)
-    Ψcur[site] = U
-    Ψcur[site+1] = S * V
-  end
-
-  #======== right-canonical ========#
-  if measents
-    U, S, V = svd(Ψcur[end], (Dχbonds[end]))
-    entropies[end] = sings2ent(S * δ(commonind(U, S), Ψbonds[end]) |> storage)
-  end
-
-  for site in N-1:-1:1
-    U, S, V = svd(Ψcur[site] * Ψcur[site+1], (Dχbonds[site+2], physinds[site+1]))
-    Dχbonds[site+1] = commonind(U, S)
-    Ψcur[site+1] = U
-    Ψcur[site] = V * S
-    if measents
-      entropies[site+1] = sings2ent(S * δ(Dχbonds[site+1], Ψbonds[site+1]) |> storage)
-    end
-  end
-  if measents
-    U, S, V = svd(Ψcur[1], Ψbonds[1])
-    entropies[1] = sings2ent(S * δ(commonind(U, S), Ψbonds[1]) |> storage)
-  end
-  for bond in 2:N # truncate
-    Ψcur[bond-1] *= δ(Dχbonds[bond], Ψbonds[bond])
-    Ψcur[bond] *= δ(Dχbonds[bond], Ψbonds[bond])
   end
 end
 
@@ -257,8 +196,8 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, cansumplot, seqtrunc=true
   for k in 1:kmax
     if seqtrunc
       cooldown_seqtrunc(Ψ[k&1+1], Ψ[2-k&1], Ψbonds, Dχbonds, physinds, l_h, rev=rev)
-    else
-      cooldown_unitrunc(Ψ[k&1+1], Ψ[2-k&1], Ψbonds, Dχbonds, physinds, l_h, rev=rev)
+    # else
+    #   cooldown_unitrunc(Ψ[k&1+1], Ψ[2-k&1], Ψbonds, Dχbonds, physinds, l_h, rev=rev)
     end
     norm2ₖ = norm2(Ψ[k&1+1], Ψbonds)
     ratioₖₖ₊₁s[k] = sqrt(norm2ₖ |> real)
@@ -323,16 +262,19 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, cansumplot, seqtrunc=true
 end
 
 function writeΨ(Ψ, filename)
-  open(filename, "w") do fp
-    content = ""
-    for p in Ψ
-      for val in storage(p)
-        content *= "$val\n"
-      end
-      content *= "\n"
-      write(fp, content)
-      content = ""
-    end
+  # open(filename, "w") do fp
+  #   content = ""
+  #   for p in Ψ
+  #     for val in storage(p)
+  #       content *= "$val\n"
+  #     end
+  #     content *= "\n"
+  #     write(fp, content)
+  #     content = ""
+  #   end
+  # end
+  jldopen(filename * ".jld2", "w") do file
+    write(file, "Ψ", Ψ)
   end
 end
 
@@ -389,9 +331,9 @@ function innerents(_Ψ, _Ψbonds)
   return fetch.(enttasks)
 end
 
-function plotents(;l, N, χ, seqtrunc=true, meastemps=[200:200:1600;], inents=false, rev=false, edgedim=χ)
+function measents(;l, N, χ, seqtrunc=true, Ts=[200:200:1600;], inents=false, rev=false, edgedim=χ, saveΨs=false)
   d = 2 # physical dimension
-  kmax = maximum(meastemps)
+  kmax = maximum(Ts)
   infost = infos(l=l, N=N, χ=χ, χaux=edgedim, kmax=kmax, seqtrunc=seqtrunc, rev=rev)
   Ψprev, Ψbonds, physinds = genΨgauss(sitenum=N, bonddim=χ, physdim=d, edgedim=edgedim)
   Ψprev /= norm2(Ψprev, Ψbonds)^inv(2N)
@@ -400,24 +342,33 @@ function plotents(;l, N, χ, seqtrunc=true, meastemps=[200:200:1600;], inents=fa
   Ψcouple = [Ψprev, Vector{ITensor}(undef, N)]
   Dχbonds = Vector{Index}(undef, N + 1)
   Dχbonds[1], Dχbonds[end] = Ψbonds[1], Ψbonds[end]
-  entsfortemp = Dict()
-  innerentsfortemp = Dict()
+  entsfortemp = [0:N;]
+  innerentsfortemp = [2:2:N;]
   entropies = Vector{Float64}(undef, N + 1)
 
-  entsfortemp["0"] = Ψentropies(Ψprev, Ψbonds)
+  entsfortemp = hcat(entsfortemp, Ψentropies(Ψprev, Ψbonds))
   if inents
-    innerentsfortemp["0"] = innerents(Ψcouple[1], Ψbonds)
+    # innerentsfortemp["0"] = innerents(Ψcouple[1], Ψbonds)
+    innerentsfortemp = hcat(innerentsfortemp, innerents(Ψcouple[1], Ψbonds))
   end
-  cooldown = seqtrunc ? cooldown_seqtrunc : cooldown_unitrunc
+  cooldown = seqtrunc ? cooldown_seqtrunc : cooldown_seqtrunc
 
   for k in 1:kmax
-    if k in meastemps
+    if k in Ts
       cooldown(Ψcouple[k&1+1], Ψcouple[2-k&1], Ψbonds, Dχbonds, physinds, l_h, entropies=entropies, rev=rev)
-      entsfortemp["$k"] = deepcopy(entropies)
+      # entsfortemp["$k"] = deepcopy(entropies)
+      entsfortemp = hcat(entsfortemp, entropies)
       if inents
-        innerentsfortemp["$k"] = innerents(Ψcouple[k&1+1], Ψbonds)
+        # innerentsfortemp["$k"] = innerents(Ψcouple[k&1+1], Ψbonds)
+        innerentsfortemp = hcat(innerentsfortemp, innerents(Ψcouple[k&1+1], Ψbonds))
       end
-      writeΨ(Ψcouple[k&1+1], "Ψ-$infost.txt")
+      if saveΨs
+        # writeΨ(Ψcouple[k&1+1], "Ψ-$infost,k=$k")
+        jldopen("Ψ-$infost.jld2", "a+") do file
+          # addrequire(file, ITensors)
+          write(file, "$k", Ψcouple[k&1+1])
+        end
+      end
     else
       cooldown(Ψcouple[k&1+1], Ψcouple[2-k&1], Ψbonds, Dχbonds, physinds, l_h, rev=rev)
     end
@@ -427,38 +378,28 @@ function plotents(;l, N, χ, seqtrunc=true, meastemps=[200:200:1600;], inents=fa
   end
   println("==== end ====")
 
-  open("entropies-$infost.txt", "w") do fp
-    content = ""
-    for item in entsfortemp
-      content *= item.first * "\n"
-      for ee in item.second
-        content *= "$ee\n"
-      end
-      content *= "\n"
-    end
-    write(fp, content)
+  open("entropies-$infost.dat", "w") do fp
+    print(fp, "T")
+    Base.print_array(fp, Ts')
+    println(fp, "\n")
+    Base.print_array(fp, entsfortemp)
   end
   plot()
-  for item in sort(entsfortemp |> collect)
-    plot!([0:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)", legend = :outerleft, title=infost)
+  for i in eachindex(Ts)
+    plot!(entsfortemp[:, 1], entsfortemp[:, 1+i], xlabel = "i", ylabel = "S_i", label = "k=$(Ts[i])", legend = :outerright, title=infost, size=(1200, 400))
   end
   savefig("entropies-$infost.png")
 
   if inents
-    open("innerents-$infost.txt", "w") do fp
-      content = ""
-      for item in innerentsfortemp
-        content *= item.first * "\n"
-        for ee in item.second
-          content *= "$ee\n"
-        end
-        content *= "\n"
-      end
-      write(fp, content)
+    open("innerents-$infost.dat", "w") do fp
+      print(fp, "T")
+      Base.print_array(fp, Ts')
+      println(fp, "\n")
+      Base.print_array(fp, innerentsfortemp)
     end
     plot()
-    for item in sort(innerentsfortemp |> collect)
-      plot!([2:2:N;], item.second, xlabel = "i", ylabel = "S_i", label = "k=$(item.first)", legend = :outerleft, title=infost)
+    for i in eachindex(Ts)
+      plot!(innerentsfortemp[:, 1], innerentsfortemp[:, 1+i], xlabel = "i", ylabel = "S_i", label = "k=$(Ts[i])", legend = :outerright, title=infost, size=(1200, 400))
     end
     savefig("innerents-$infost.png")
   end
@@ -518,8 +459,8 @@ function plotuβs_forl()
   savefig("uβ-forl,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc.png")
 end
 
-# @time plotents(l=5, N=16, χ=20, seqtrunc=true, meastemps=[0:50:400;], inents=true, rev=false)
-# @time plotuβs_samel(l=5, kmax=1200, χ=40, N=16, repnum=5, withaux=true, seqtrunc=true, edgedim=40)
+@time measents(l=5, N=8, χ=10, seqtrunc=true, Ts=[0:50:400;], inents=true, rev=false, saveΨs=true)
+# @time plotuβs_samel(l=5, kmax=500, χ=40, N=16, repnum=5, seqtrunc=true, edgedim=40)
 
 function cmpse_forχaux()
   aveplot = plot()
@@ -534,4 +475,4 @@ function cmpse_forχaux()
   savefig(sesplot, "cmp-se-u-forχaux.png")
 end
 
-@time cmpse_forχaux()
+# @time cmpse_forχaux()

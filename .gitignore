@@ -1,2 +1,5 @@
 *.png
 *.txt
+*.dat
+*.jld2
+data/

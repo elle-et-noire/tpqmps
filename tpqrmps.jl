@@ -241,19 +241,21 @@ function plotuβ(;N=16, χ=40, l, kmax=100, counter=0, cansumplot, seqtrunc=true
 
   if savedata
     open("uβ-$infost,No$counter.txt", "w") do fp
-      content = ""
-      for (t, uk) in zip(kBT, uβs)
-        content *= "$t $uk\n"
-      end
-      write(fp, content)
+      # content = ""
+      # for (t, uk) in zip(kBT, uβs)
+      #   content *= "$t $uk\n"
+      # end
+      # write(fp, content)
+      Base.print_array(fp, hcat(kBT, uβs))
     end
 
     open("ukBT-$infost,No$counter.txt", "w") do fp
-      content = ""
-      for (t, uk) in zip([N * (l - uₖs[k]) / 2k for k in 1:kmax], uₖs)
-        content *= "$t $uk\n"
-      end
-      write(fp, content)
+      # content = ""
+      # for (t, uk) in zip([N * (l - uₖs[k]) / 2k for k in 1:kmax], uₖs)
+      #   content *= "$t $uk\n"
+      # end
+      # write(fp, content)
+      Base.print_array(fp, hcat([N * (l - uₖs[k]) / 2k for k in 1:kmax], uₖs))
     end
   end
 
@@ -348,7 +350,6 @@ function measents(;l, N, χ, seqtrunc=true, Ts=[200:200:1600;], inents=false, re
 
   entsfortemp = hcat(entsfortemp, Ψentropies(Ψprev, Ψbonds))
   if inents
-    # innerentsfortemp["0"] = innerents(Ψcouple[1], Ψbonds)
     innerentsfortemp = hcat(innerentsfortemp, innerents(Ψcouple[1], Ψbonds))
   end
   cooldown = seqtrunc ? cooldown_seqtrunc : cooldown_seqtrunc
@@ -356,16 +357,12 @@ function measents(;l, N, χ, seqtrunc=true, Ts=[200:200:1600;], inents=false, re
   for k in 1:kmax
     if k in Ts
       cooldown(Ψcouple[k&1+1], Ψcouple[2-k&1], Ψbonds, Dχbonds, physinds, l_h, entropies=entropies, rev=rev)
-      # entsfortemp["$k"] = deepcopy(entropies)
       entsfortemp = hcat(entsfortemp, entropies)
       if inents
-        # innerentsfortemp["$k"] = innerents(Ψcouple[k&1+1], Ψbonds)
         innerentsfortemp = hcat(innerentsfortemp, innerents(Ψcouple[k&1+1], Ψbonds))
       end
       if saveΨs
-        # writeΨ(Ψcouple[k&1+1], "Ψ-$infost,k=$k")
         jldopen("Ψ-$infost.jld2", "a+") do file
-          # addrequire(file, ITensors)
           write(file, "$k", Ψcouple[k&1+1])
         end
       end
@@ -407,7 +404,7 @@ function measents(;l, N, χ, seqtrunc=true, Ts=[200:200:1600;], inents=false, re
   println("\n\n==== time record ====")
 end
 
-function plotuβs_samel(;l, kmax, χ, N, repnum, seqtrunc, edgedim, rev=false)
+function repcalcuβs(;l, kmax, χ, N, repnum, seqtrunc, edgedim=χ, rev=false, saveplot=true, savedata=true)
   cansumplot = plot()
   uβss = Vector{Vector{Float64}}(undef, repnum)
   kBT = []
@@ -415,8 +412,10 @@ function plotuβs_samel(;l, kmax, χ, N, repnum, seqtrunc, edgedim, rev=false)
   for i in 1:repnum
     @time kBT, uβss[i], _, _ = plotuβ(N=N, χ=χ, l=l, kmax=kmax, counter=i, cansumplot=cansumplot, seqtrunc=seqtrunc, edgedim=edgedim, rev=rev)
   end
-  plot(cansumplot)
-  savefig("uβ-$infost.png")
+  if saveplot
+    plot(cansumplot)
+    savefig("uβ-$infost.png")
+  end
   aves = zeros(Float64, length(uβss[1]))
   var = zeros(Float64, length(uβss[1]))
   for i in 1:repnum
@@ -436,43 +435,100 @@ function plotuβs_samel(;l, kmax, χ, N, repnum, seqtrunc, edgedim, rev=false)
   # savefig("ave_uβ-l=$l,kmax=$kmax,χ=$χ,N=$N,seqtrunc=$seqtrunc,repnum=$repnum,edgedim=$edgedim.png")
 
   open("uβave-$infost.txt", "w") do fp
-    content = ""
-    for (t, ave, se) in zip(kBT, aves, ses)
-      content *= "$t $ave $se\n"
-    end
-    write(fp, content)
+    # content = ""
+    # for (t, ave, se) in zip(kBT, aves, ses)
+    #   content *= "$t $ave $se\n"
+    # end
+    # write(fp, content)
+    Base.print_array(fp, hcat(kBT, aves, ses))
   end
   return kBT, aves, ses
 end
 
-function plotuβs_forl()
-  cansumplot = plot()
-  kmax = 200
-  seqtrunc = true
-  withaux = true
-  N = 16
-  χ = 20
-  for l in [2,8,32]
-    plotuβ(N=N, χ=χ, l=l, kmax=kmax, cansumplot=cansumplot, seqtrunc=seqtrunc)
-  end
-  plot(cansumplot)
-  savefig("uβ-forl,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc.png")
-end
+# function plotuβs_forl()
+#   cansumplot = plot()
+#   kmax = 200
+#   seqtrunc = true
+#   withaux = true
+#   N = 16
+#   χ = 20
+#   for l in [2,8,32]
+#     plotuβ(N=N, χ=χ, l=l, kmax=kmax, cansumplot=cansumplot, seqtrunc=seqtrunc)
+#   end
+#   plot(cansumplot)
+#   savefig("uβ-forl,kmax=$kmax,χ=$χ,N=$N,withaux=$withaux,seqtrunc=$seqtrunc.png")
+# end
 
-@time measents(l=5, N=8, χ=10, seqtrunc=true, Ts=[0:50:400;], inents=true, rev=false, saveΨs=true)
+# function loadstartmeasents(filename, lastk)
+#   Ψ = load(filename, lastk)
+
+# end
+
+# @time measents(l=5, N=64, χ=40, seqtrunc=true, Ts=[0:200:1200;], inents=true, rev=false, saveΨs=true, edgedim=1)
 # @time plotuβs_samel(l=5, kmax=500, χ=40, N=16, repnum=5, seqtrunc=true, edgedim=40)
 
 function cmpse_forχaux()
   aveplot = plot()
   sesplot = plot()
   χauxs = [1, 5, 10, 20]
+  l = 5; kmax = 500; χ = 5; N = 8; repnum = 50; seqtrunc = true; rev = false
+  kBT = []
+  aves = []
+  ses = []
   for χaux in χauxs
-    kBT, ave, se = plotuβs_samel(l=5, kmax=500, χ=10, N=8, repnum=50, seqtrunc=true, edgedim=χaux)
-    plot!(aveplot, kBT, ave, xlabel="kBT", ylabel="average of E/N", legend=:outerleft, label="χaux=$χaux")
-    plot!(sesplot, kBT, se, xlabel="kBT", ylabel="standard error of E/N", legend=:outerleft, label="χaux=$χaux")
+    kBT, ave, se = repcalcuβs(l=l, kmax=kmax, χ=χ, N=N, repnum=repnum, seqtrunc=seqtrunc, edgedim=χaux, saveplot=false, savedata=false, rev=rev)
+    plot!(aveplot, kBT, ave, xlabel="kBT", ylabel="average of E/N", legend=:outerleft, label="χaux=$χaux", size=(800, 400))
+    plot!(sesplot, kBT, se, xlabel="kBT", ylabel="standard error of E/N", legend=:outerleft, label="χaux=$χaux", size=(800, 400))
+    if length(aves) == 0
+      aves = deepcopy(kBT)
+    end
+    if length(ses) == 0
+      ses = deepcopy(kBT)
+    end
+    aves = hcat(aves, ave)
+    ses = hcat(ses, se)
   end
-  savefig(aveplot, "cmp-ave-u-forχaux.png")
-  savefig(sesplot, "cmp-se-u-forχaux.png")
+  infost = infos(l=l, N=N, χ=χ, χaux="-", kmax=kmax, seqtrunc=seqtrunc, rev=rev)
+  savefig(aveplot, "cmp-ave-u-forχaux,$infost.png")
+  savefig(sesplot, "cmp-se-u-forχaux,$infost.png")
+  open("cmp-ave-u-forχaux,$infost.dat", "w") do fp
+    Base.print_array(fp, aves)
+  end
+  open("cmp-se-u-forχaux,$infost.dat", "w") do fp
+    Base.print_array(fp, ses)
+  end
 end
 
-# @time cmpse_forχaux()
+function cmpse_forN()
+  aveplot = plot()
+  sesplot = plot()
+  Ns = [4, 8, 16, 32]
+  l = 5; kmax = 500; χ = 10; repnum = 10; seqtrunc = true; rev = false; χaux = χ
+  kBT = []
+  aves = []
+  ses = []
+  for N in Ns
+    kBT, ave, se = repcalcuβs(l=l, kmax=kmax, χ=χ, N=N, repnum=repnum, seqtrunc=seqtrunc, edgedim=χaux, saveplot=false, savedata=false, rev=rev)
+    plot!(aveplot, kBT, ave, xlabel="kBT", ylabel="average of E/N", legend=:outerleft, label="N=$N", size=(800, 400))
+    plot!(sesplot, kBT, se, xlabel="kBT", ylabel="standard error of E/N", legend=:outerleft, label="N=$N", size=(800, 400))
+    if length(aves) == 0
+      aves = deepcopy(kBT)
+    end
+    if length(ses) == 0
+      ses = deepcopy(kBT)
+    end
+    aves = hcat(aves, ave)
+    ses = hcat(ses, se)
+  end
+  infost = infos(l=l, N="-", χ=χ, χaux=χ, kmax=kmax, seqtrunc=seqtrunc, rev=rev)
+  savefig(aveplot, "cmp-ave-u-forN,$infost.png")
+  savefig(sesplot, "cmp-se-u-forN,$infost.png")
+  open("cmp-ave-u-forN,$infost.dat", "w") do fp
+    Base.print_array(fp, aves)
+  end
+  open("cmp-se-u-forN,$infost.dat", "w") do fp
+    Base.print_array(fp, ses)
+  end
+end
+
+@time cmpse_forχaux()
